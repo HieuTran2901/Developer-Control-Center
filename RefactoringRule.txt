@@ -1,0 +1,271 @@
+==================================================
+REFACTORING GOVERNANCE RULES
+==================================================
+
+Từ thời điểm này, Refactoring là một phần chính thức của quy trình phát triển.
+
+Mục tiêu:
+
+- Duy trì chất lượng kiến trúc lâu dài.
+- Giảm Technical Debt.
+- Không để hệ thống ngày càng khó bảo trì.
+- Không refactor tùy hứng.
+
+==================================================
+RULE R001 - REFACTORING IS A PLANNED ACTIVITY
+==================================================
+
+Không được refactor trong lúc làm feature nếu việc refactor không phục vụ trực tiếp cho feature đó.
+
+Nếu phát hiện vấn đề kiến trúc:
+
+- Ghi nhận vào Technical Debt List.
+- Hoặc ghi vào decisions.md.
+- Hoặc desktop-audit.md.
+
+Chỉ thực hiện khi đến Refactoring Milestone.
+
+==================================================
+RULE R002 - REFACTORING MILESTONE
+==================================================
+
+Sau mỗi:
+
+3–4 Feature Milestones
+
+hoặc
+
+5.000–8.000 dòng code thay đổi
+
+phải có một Refactoring Milestone.
+
+Milestone này KHÔNG thêm tính năng mới.
+
+Chỉ:
+
+- cải thiện kiến trúc
+- giảm technical debt
+- tối ưu code
+- cập nhật documentation
+
+==================================================
+RULE R003 - NO FEATURE DURING REFACTOR
+==================================================
+
+Trong Refactoring Milestone:
+
+KHÔNG được:
+
+- thêm UI mới
+- thêm API mới
+- thêm command mới
+- thêm business feature
+
+Chỉ cải thiện những gì đã tồn tại.
+
+==================================================
+RULE R004 - REFACTOR CHECKLIST
+==================================================
+
+Refactoring Milestone phải kiểm tra:
+
+✓ TODO
+
+✓ FIXME
+
+✓ duplicated code
+
+✓ dead code
+
+✓ unused imports
+
+✓ warnings
+
+✓ obsolete comments
+
+✓ naming consistency
+
+✓ folder structure
+
+✓ dependency direction
+
+✓ architecture consistency
+
+==================================================
+RULE R005 - TECHNICAL DEBT REGISTER
+==================================================
+
+Mọi vấn đề chưa xử lý phải được ghi lại.
+
+Ví dụ:
+
+- Zombie Process
+
+- ANSI Parser
+
+- DOM Virtualization
+
+- IPC Batching
+
+- Job Objects
+
+- Workspace Persistence
+
+Không được để TODO rải rác trong code nếu có thể đưa vào tài liệu.
+
+==================================================
+RULE R006 - REFACTOR LIMIT
+==================================================
+
+Một Refactoring Milestone:
+
+Không quá:
+
+2000 dòng thay đổi.
+
+Nếu vượt:
+
+Chia nhỏ.
+
+Ví dụ:
+
+Architecture Cleanup
+
+Performance Cleanup
+
+Runtime Cleanup
+
+Documentation Cleanup
+
+==================================================
+RULE R007 - SAFE REFACTOR
+==================================================
+
+Refactoring không được:
+
+- phá API
+- phá IPC
+- phá DTO
+- đổi hành vi hệ thống
+
+Nếu cần Breaking Change:
+
+Phải lập kế hoạch riêng.
+
+==================================================
+RULE R008 - DOCUMENTATION UPDATE
+==================================================
+
+Sau Refactoring phải cập nhật:
+
+docs/README.md
+
+docs/architecture.md
+
+docs/roadmap.md
+
+docs/decisions.md
+
+docs/reports/desktop-audit.md
+
+==================================================
+RULE R009 - BUILD VALIDATION
+==================================================
+
+Refactoring chỉ hoàn thành khi:
+
+✓ npm run build PASS
+
+✓ cargo check PASS
+
+✓ npm run tauri dev PASS
+
+✓ Documentation Updated
+
+==================================================
+RULE R010 - REFACTOR REPORT
+==================================================
+
+Sau mỗi Refactoring Milestone tạo báo cáo:
+
+Refactoring Report
+
+Bao gồm:
+
+1. Modules được dọn dẹp
+
+2. Technical Debt đã xử lý
+
+3. Technical Debt còn lại
+
+4. Các file ảnh hưởng
+
+5. Kiến trúc thay đổi (nếu có)
+
+6. Performance Impact
+
+7. Build Status
+
+==================================================
+RULE R011 - PERFORMANCE OPTIMIZATION
+==================================================
+
+Không tối ưu hiệu năng nếu chưa có số liệu đo đạc.
+
+Mọi tối ưu phải dựa trên:
+
+- Benchmark
+- Profiling
+- Memory Usage
+- CPU Usage
+- Startup Time
+- Runtime Metrics
+
+Không thực hiện Premature Optimization.
+
+==================================================
+RULE R012 - STABILITY BEFORE FEATURES
+==================================================
+
+Ưu tiên theo thứ tự:
+
+1. Stability
+
+2. Maintainability
+
+3. Performance
+
+4. New Features
+
+Nếu hệ thống còn Technical Debt nghiêm trọng (ví dụ Zombie Process, Process Lifecycle, Resource Leak), ưu tiên xử lý trước khi bổ sung các tính năng mới không thiết yếu.
+
+==================================================
+RULE R013 - RELEASE CHECKPOINT
+==================================================
+
+Sau mỗi 3–5 milestone ổn định:
+
+- tạo Git Tag (ví dụ: v0.2.0-alpha)
+- cập nhật changelog
+- xác nhận build xanh
+- xác nhận documentation đồng bộ
+
+Chỉ sau đó mới bắt đầu nhóm tính năng tiếp theo.
+
+RULE R014 - ARCHITECTURE FIRST
+
+Nếu có nhiều cách triển khai một tính năng:
+
+Luôn ưu tiên phương án:
+
+- ít phụ thuộc hơn
+- dễ test hơn
+- dễ mở rộng hơn
+- dễ thay thế hơn
+
+Thay vì:
+
+- ít dòng code hơn
+- nhanh viết hơn
+
+Mọi quyết định kiến trúc phải ưu tiên khả năng bảo trì lâu dài hơn là tốc độ phát triển ngắn hạn.

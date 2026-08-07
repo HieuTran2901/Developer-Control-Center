@@ -1,0 +1,133 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Color Palette */
+    --background: 0 0% 100%;
+    --surface: 0 0% 98%;
+    --foreground: 222.2 84% 4.9%;
+
+    --primary: 221 83% 53%; /* Modern Blue */
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 210 40% 98%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 210 40% 98%;
+
+    --danger: 348 100% 61%;
+    --danger-foreground: 210 40% 98%;
+
+    --info: 199 89% 48%;
+    --info-foreground: 210 40% 98%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --hover: 210 40% 90%;
+    --disabled: 210 20% 90%;
+    --overlay: 0 0% 0% / 0.4;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 221 83% 53%;
+
+    /* Standard Shadcn Compatibility */
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --destructive: 348 100% 61%;
+    --destructive-foreground: 210 40% 98%;
+
+    /* Radius System */
+    --radius-sm: 0.25rem;
+    --radius-md: 0.5rem;
+    --radius-lg: 0.75rem;
+    --radius-xl: 1rem;
+    --radius: 0.5rem; /* Default for shadcn */
+  }
+
+  .dark {
+    /* Color Palette */
+    --background: 222.2 47% 7%;
+    --surface: 222.2 47% 11%;
+    --foreground: 210 40% 98%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 210 40% 98%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 210 40% 98%;
+
+    --danger: 348 100% 61%;
+    --danger-foreground: 210 40% 98%;
+
+    --info: 199 89% 48%;
+    --info-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --hover: 217.2 32.6% 25%;
+    --disabled: 217.2 20% 25%;
+    --overlay: 0 0% 0% / 0.6;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 217 91% 60%;
+
+    /* Standard Shadcn Compatibility */
+    --card: 222.2 47% 11%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 47% 11%;
+    --popover-foreground: 210 40% 98%;
+    --destructive: 348 100% 61%;
+    --destructive-foreground: 210 40% 98%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  
+  /* Typography Scale Overrides */
+  h1, .text-display { @apply text-4xl font-bold tracking-tight; }
+  h2, .text-heading { @apply text-3xl font-semibold tracking-tight; }
+  h3, .text-title { @apply text-2xl font-semibold tracking-tight; }
+  h4 { @apply text-xl font-semibold tracking-tight; }
+  .text-body { @apply text-base; }
+  .text-caption { @apply text-sm text-muted-foreground; }
+  .text-label { @apply text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70; }
+  .text-mono { @apply font-mono text-sm; }
+}
+
+@layer utilities {
+  .shadow-small { box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
+  .shadow-medium { box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); }
+  .shadow-large { box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); }
+  .shadow-floating { box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1); }
+  .shadow-dialog { box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25); }
+}

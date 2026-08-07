@@ -1,0 +1,217 @@
+# Developer Control Center - Development Governance Rules
+
+Từ thời điểm hiện tại, áp dụng các quy tắc quản lý phát triển sau cho toàn bộ các milestone tiếp theo.
+
+=========================================
+RULE 001 - CHANGE SIZE LIMIT
+=========================================
+
+Mỗi milestone chỉ được phép thay đổi trong phạm vi:
+
+Minimum:
+- Không bắt buộc phải đạt 1000 dòng.
+
+Maximum:
+- Không vượt quá 2000 dòng code thay đổi.
+
+Bao gồm:
+
+- File mới tạo
+- File chỉnh sửa
+- File xóa
+- Refactor liên quan
+
+Nếu một milestone dự kiến vượt quá 2000 dòng:
+
+KHÔNG được tiếp tục triển khai.
+
+Phải:
+
+1. Dừng lại.
+2. Phân tích phạm vi công việc.
+3. Chia milestone thành các sub-milestone nhỏ hơn.
+4. Tạo Implementation Plan mới.
+
+=========================================
+RULE 002 - SINGLE RESPONSIBILITY MILESTONE
+=========================================
+
+Mỗi milestone chỉ tập trung vào MỘT mục tiêu kỹ thuật duy nhất.
+
+Ví dụ hợp lệ:
+
+✓ Process State Machine
+
+✓ Process Registry
+
+✓ Terminal UI
+
+✓ Log Streaming
+
+✓ Workspace Configuration
+
+
+Ví dụ không hợp lệ:
+
+❌ Process Manager + Terminal + AI Analysis trong cùng milestone
+
+❌ UI redesign + Backend architecture + Database migration cùng lúc
+
+
+=========================================
+RULE 003 - ARCHITECTURE PROTECTION
+=========================================
+
+Trước khi thêm code mới:
+
+Phải kiểm tra:
+
+- Clean Architecture boundaries
+- Existing interfaces
+- Existing abstractions
+- Dependency direction
+
+Không được:
+
+- bypass Application layer
+- đưa business logic vào UI
+- đưa UI logic vào Rust
+- tạo file God Object quá lớn
+
+
+=========================================
+RULE 004 - FILE SIZE LIMIT
+=========================================
+
+Không tạo file quá lớn.
+
+Giới hạn:
+
+TypeScript/React:
+
+Maximum:
+500 lines/file
+
+
+Rust:
+
+Maximum:
+500 lines/file
+
+
+Java:
+
+Maximum:
+500 lines/file
+
+
+Nếu vượt giới hạn:
+
+Phải tách thành:
+
+- Service
+- Handler
+- Adapter
+- Helper
+- Module
+
+
+=========================================
+RULE 005 - BEFORE CODING CHECK
+=========================================
+
+Trước mỗi milestone:
+
+Phải tạo:
+
+Implementation Plan
+
+Bao gồm:
+
+1. Mục tiêu
+
+2. Scope
+
+3. Không làm gì
+
+4. Danh sách file dự kiến thay đổi
+
+5. Estimated lines changed
+
+6. Risk assessment
+
+
+Nếu Estimated lines changed > 2000:
+
+Phải chia nhỏ.
+
+
+=========================================
+RULE 006 - BUILD VERIFICATION
+=========================================
+
+Mỗi milestone chỉ được coi là hoàn thành khi:
+
+Frontend:
+
+✓ npm run build PASS
+
+
+Tauri:
+
+✓ npm run tauri dev PASS
+
+
+Rust:
+
+✓ cargo check PASS
+
+
+Không có:
+
+- TypeScript error
+- Vite error
+- Rust compile error
+
+
+=========================================
+RULE 007 - REPORT AFTER COMPLETION
+=========================================
+
+Sau mỗi milestone tạo báo cáo:
+
+## Milestone Report
+
+### Summary
+
+### Changed Files
+
+### Added Files
+
+### Removed Files
+
+### Lines Changed
+
+### Architecture Impact
+
+### Testing Result
+
+### Next Recommended Step
+
+
+=========================================
+CURRENT TASK
+=========================================
+
+Trước khi tiếp tục Process Runtime Foundation:
+
+1. Kiểm tra milestone hiện tại.
+
+2. Ước lượng số dòng code dự kiến.
+
+3. Nếu vượt quá 2000 dòng:
+   - chia nhỏ thành nhiều milestone.
+
+4. Báo cáo kế hoạch trước khi viết code.
+
+Không bắt đầu implementation nếu chưa có plan phù hợp.
