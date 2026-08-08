@@ -1,4 +1,5 @@
-﻿import { ProcessState } from './ProcessState';
+import { ProcessState } from './ProcessState';
+import { ReadinessState } from './ReadinessState';
 
 export interface ProcessModel {
   id: string; // Typically ${projectId}-${profileId}
@@ -9,6 +10,7 @@ export interface ProcessModel {
   args?: string[];
   workingDirectory: string;
   status: ProcessState;
+  readiness?: ReadinessState;
   startTime?: number; // timestamp
   stopTime?: number; // timestamp
   exitCode?: number;

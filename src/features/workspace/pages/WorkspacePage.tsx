@@ -212,7 +212,7 @@ export function WorkspacePage() {
     >
       <div className="flex flex-1 overflow-hidden">
         {/* Left Sidebar */}
-        <div className="w-[260px] border-r border-border/40 bg-[#0d1117]/40 flex flex-col shrink-0 overflow-y-auto">
+        <div className="w-[260px] max-w-[35vw] border-r border-border/40 bg-[#0d1117]/40 flex flex-col overflow-y-auto">
           <WorkspaceSidebar
             workspace={workspace}
             selectedProjectId={selectedProjectId || null}

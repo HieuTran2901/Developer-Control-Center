@@ -1,20 +1,23 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { RuntimeProfile } from '@/domain/entities/RuntimeProfile';
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
 import { Icon } from '@/shared/components/ui/Icon';
 import { Switch } from '@/shared/components/ui/switch';
 import { tauriDesktopGateway } from '@/application/services';
+import { useToast } from '@/shared/hooks/useToast';
 
 interface ProfileEditorProps {
   profile: RuntimeProfile;
-  onSave: (profile: RuntimeProfile) => void;
+  onSave: (profile: RuntimeProfile) => Promise<void>;
   onDelete: () => void;
 }
 
 export function ProfileEditor({ profile, onSave, onDelete }: ProfileEditorProps) {
   const [formData, setFormData] = useState<RuntimeProfile>(profile);
   const [argsStr, setArgsStr] = useState(profile.arguments.join(' '));
+  const [isSaving, setIsSaving] = useState(false);
+  const { toast } = useToast();
 
   // Sync state when selected profile changes
   useEffect(() => {
@@ -44,8 +47,23 @@ export function ProfileEditor({ profile, onSave, onDelete }: ProfileEditorProps)
     }
   };
 
-  const handleSave = () => {
-    onSave(formData);
+  const handleSave = async () => {
+    try {
+      setIsSaving(true);
+      await onSave(formData);
+      toast({
+        title: "Profile saved successfully",
+        type: "success"
+      });
+    } catch (err: any) {
+      toast({
+        title: "Failed to save profile",
+        description: err?.message || String(err),
+        type: "error"
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -56,13 +74,13 @@ export function ProfileEditor({ profile, onSave, onDelete }: ProfileEditorProps)
           <p className="text-muted-foreground text-sm mt-1">Configure environment and launch commands.</p>
         </div>
         <div className="flex space-x-3">
-          <Button variant="destructive" onClick={onDelete}>
+          <Button variant="destructive" onClick={onDelete} disabled={isSaving}>
             <Icon name="Trash2" size={16} className="mr-2" />
             Delete
           </Button>
-          <Button onClick={handleSave}>
-            <Icon name="Save" size={16} className="mr-2" />
-            Save Profile
+          <Button onClick={handleSave} disabled={isSaving}>
+            <Icon name={isSaving ? "Loader2" : "Save"} size={16} className={`mr-2 ${isSaving ? 'animate-spin' : ''}`} />
+            {isSaving ? 'Saving...' : 'Save Profile'}
           </Button>
         </div>
       </div>
@@ -150,6 +168,21 @@ export function ProfileEditor({ profile, onSave, onDelete }: ProfileEditorProps)
             <Switch 
               checked={formData.autoStart || false}
               onCheckedChange={(c) => setFormData({...formData, autoStart: c})}
+            />
+          </div>
+
+          <div className="space-y-2 mt-4">
+            <label className="text-sm font-medium flex items-center">
+              <Icon name="Search" size={14} className="mr-2 text-primary" />
+              Readiness Regex (Optional)
+            </label>
+            <p className="text-xs text-muted-foreground">Detect when the application is ready to serve traffic.</p>
+            <Input 
+              name="readinessRegex" 
+              value={formData.readinessRegex || ''} 
+              onChange={handleChange} 
+              placeholder="e.g. Server started on port \d+"
+              className="bg-[#161b22] border-border/50 font-mono text-sm"
             />
           </div>
         </div>

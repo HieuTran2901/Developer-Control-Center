@@ -2,6 +2,7 @@ import { listen } from '@tauri-apps/api/event';
 import { EventBus, EventType } from '@/application/events/EventBus';
 import { runtimeRegistry } from '@/application/services';
 import { ProcessState } from '@/domain/entities/ProcessState';
+import { ReadinessState } from '@/domain/entities/ReadinessState';
 
 interface ProcessEventPayload {
   type: string;
@@ -16,8 +17,12 @@ const processEventHandlers: Record<string, ProcessEventHandler> = {
     EventBus.publish(EventType.ProcessStarting, payload);
   },
   'ProcessStarted': (id, payload) => {
-    runtimeRegistry.update(id, { status: ProcessState.Running, pid: payload.pid });
+    runtimeRegistry.update(id, { status: ProcessState.Running, pid: payload.pid, readiness: payload.readiness as ReadinessState });
     EventBus.publish(EventType.ProcessStarted, { ...payload, status: ProcessState.Running });
+  },
+  'ProcessReadinessChanged': (id, payload) => {
+    runtimeRegistry.update(id, { readiness: payload.readiness as ReadinessState });
+    EventBus.publish(EventType.ProcessReadinessChanged, payload);
   },
   'ProcessRestarting': (id, payload) => {
     runtimeRegistry.update(id, { status: ProcessState.Restarting });
@@ -28,16 +33,16 @@ const processEventHandlers: Record<string, ProcessEventHandler> = {
     EventBus.publish(EventType.ProcessStopping, payload);
   },
   'ProcessStopped': (id, payload) => {
-    runtimeRegistry.update(id, { status: ProcessState.Stopped, stopTime: Date.now() });
-    EventBus.publish(EventType.ProcessStopped, payload);
+    runtimeRegistry.update(id, { status: ProcessState.Stopped, stopTime: Date.now(), readiness: ReadinessState.Unknown });
+    EventBus.publish(EventType.ProcessStopped, { ...payload, status: ProcessState.Stopped, readiness: ReadinessState.Unknown });
   },
   'ProcessExited': (id, payload) => {
-    runtimeRegistry.update(id, { status: ProcessState.Stopped, stopTime: Date.now() });
-    EventBus.publish(EventType.ProcessExited, payload);
+    runtimeRegistry.update(id, { status: ProcessState.Stopped, stopTime: Date.now(), readiness: ReadinessState.Unknown });
+    EventBus.publish(EventType.ProcessExited, { ...payload, status: ProcessState.Stopped, readiness: ReadinessState.Unknown });
   },
   'ProcessFailed': (id, payload) => {
-    runtimeRegistry.update(id, { status: ProcessState.Failed, stopTime: Date.now() });
-    EventBus.publish(EventType.ProcessFailed, payload);
+    runtimeRegistry.update(id, { status: ProcessState.Failed, stopTime: Date.now(), readiness: ReadinessState.Unknown });
+    EventBus.publish(EventType.ProcessFailed, { ...payload, status: ProcessState.Failed, readiness: ReadinessState.Unknown });
   },
   'ProcessOutput': (_id, payload) => {
     EventBus.publish(EventType.ProcessOutput, payload);

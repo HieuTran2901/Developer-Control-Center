@@ -1,18 +1,21 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Project } from '@/domain/entities/Project';
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
 import { Icon } from '@/shared/components/ui/Icon';
 import { tauriDesktopGateway } from '@/application/services';
+import { useToast } from '@/shared/hooks/useToast';
 
 interface ProjectEditorProps {
   project: Project;
-  onSave: (project: Project) => void;
+  onSave: (project: Project) => Promise<void>;
   onDelete: () => void;
 }
 
 export function ProjectEditor({ project, onSave, onDelete }: ProjectEditorProps) {
   const [formData, setFormData] = useState<Project>(project);
+  const [isSaving, setIsSaving] = useState(false);
+  const { toast } = useToast();
 
   // Sync state when selected project changes
   useEffect(() => {
@@ -34,8 +37,23 @@ export function ProjectEditor({ project, onSave, onDelete }: ProjectEditorProps)
     }
   };
 
-  const handleSave = () => {
-    onSave(formData);
+  const handleSave = async () => {
+    try {
+      setIsSaving(true);
+      await onSave(formData);
+      toast({
+        title: "Changes saved successfully",
+        type: "success"
+      });
+    } catch (err: any) {
+      toast({
+        title: "Failed to save changes",
+        description: err?.message || String(err),
+        type: "error"
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -46,13 +64,13 @@ export function ProjectEditor({ project, onSave, onDelete }: ProjectEditorProps)
           <p className="text-muted-foreground text-sm mt-1">Configure your project details and root path.</p>
         </div>
         <div className="flex space-x-3">
-          <Button variant="destructive" onClick={onDelete}>
+          <Button variant="destructive" onClick={onDelete} disabled={isSaving}>
             <Icon name="Trash2" size={16} className="mr-2" />
             Delete
           </Button>
-          <Button onClick={handleSave}>
-            <Icon name="Save" size={16} className="mr-2" />
-            Save Changes
+          <Button onClick={handleSave} disabled={isSaving}>
+            <Icon name={isSaving ? "Loader2" : "Save"} size={16} className={`mr-2 ${isSaving ? 'animate-spin' : ''}`} />
+            {isSaving ? 'Saving...' : 'Save Changes'}
           </Button>
         </div>
       </div>

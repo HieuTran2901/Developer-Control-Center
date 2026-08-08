@@ -15,7 +15,9 @@ export interface RuntimeProfileViewModel {
   command: string;
   arguments: string[];
   status: ProcessState;
+  readinessState?: import('@/domain/entities/ReadinessState').ReadinessState;
   pid?: number;
+  startTime?: number;
 }
 
 export interface ProjectViewModel extends Project {
@@ -149,9 +151,15 @@ function WorkspaceProviderComponent({ children }: { children: ReactNode }) {
           const updatedProfiles = project.profiles.map(profile => {
             const targetId = payload.profileId || payload.serviceId;
             if (profile.id !== targetId) return profile;
-            return { ...profile, status: payload.status, pid: payload.pid };
+            return { 
+              ...profile, 
+              ...(payload.status ? { status: payload.status } : {}), 
+              ...(payload.pid !== undefined ? { pid: payload.pid } : {}),
+              ...(payload.readiness ? { readinessState: payload.readiness } : {}),
+              ...(payload.startTime ? { startTime: payload.startTime } : {})
+            };
           });
-          const isAnyRunning = updatedProfiles.some(s => s.status === ProcessState.Running || s.status === ProcessState.Starting);
+          const isAnyRunning = updatedProfiles.some(s => s.status === ProcessState.Running || s.status === ProcessState.Starting || s.status === ProcessState.Stopping);
           const isAnyError = updatedProfiles.some(s => s.status === ProcessState.Failed);
           const projectStatus = isAnyError ? ProcessState.Failed : (isAnyRunning ? ProcessState.Running : ProcessState.Stopped);
           return { ...project, profiles: updatedProfiles, status: projectStatus };
@@ -161,19 +169,23 @@ function WorkspaceProviderComponent({ children }: { children: ReactNode }) {
     };
 
     const unsubStarted = EventBus.subscribe<ProcessStatusResponse>(EventType.ProcessStarted, handleStatusChange);
+    const unsubStopping = EventBus.subscribe<ProcessStatusResponse>(EventType.ProcessStopping, handleStatusChange);
     const unsubStopped = EventBus.subscribe<ProcessStatusResponse>(EventType.ProcessStopped, handleStatusChange);
     const unsubExited = EventBus.subscribe<ProcessStatusResponse>(EventType.ProcessExited, handleStatusChange);
     const unsubFailed = EventBus.subscribe<ProcessStatusResponse>(EventType.ProcessFailed, handleStatusChange);
     const unsubRestarting = EventBus.subscribe<ProcessStatusResponse>(EventType.ProcessRestarting, handleStatusChange);
+    const unsubReadiness = EventBus.subscribe<ProcessStatusResponse>(EventType.ProcessReadinessChanged, handleStatusChange);
 
     return () => {
       unsubSession();
       unsubWorkspace();
       unsubStarted();
+      unsubStopping();
       unsubStopped();
       unsubExited();
       unsubFailed();
       unsubRestarting();
+      unsubReadiness();
     };
   }, []);
 

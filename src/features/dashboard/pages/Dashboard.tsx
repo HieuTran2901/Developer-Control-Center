@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui
 import { Button } from '@/shared/components/ui/button';
 import { Icon } from '@/shared/components/ui/Icon';
 import { ProcessState } from '@/domain/entities/ProcessState';
+import { ReadinessState } from '@/domain/entities/ReadinessState';
 import { useWorkspace } from '@/shared/hooks/useWorkspace';
 import { AlertPanel } from '../components/AlertPanel';
 import { SparklineChart } from '../components/SparklineChart';
@@ -118,12 +119,17 @@ export function Dashboard() {
     : Array(20).fill(0);
 
   const toggleService = async (projectId: string, profile: any) => {
+    // Prevent stop if process is starting/waiting or stopping
+    if (profile.status === ProcessState.Stopping || profile.readinessState === ReadinessState.Waiting) {
+      return;
+    }
+
     if (profile.status === ProcessState.Running || profile.status === ProcessState.Starting) {
       await processLifecycleService.stop(projectId, profile.id);
     } else {
       const cmd = profile.command ? `${profile.command} ${(profile.arguments || []).join(' ')}`.trim() : 'npm run start';
       const cwd = profile.workingDirectory || './';
-      await processLifecycleService.start(projectId, profile.id, cmd, cwd);
+      await processLifecycleService.start(projectId, profile.id, cmd, cwd, profile.readinessRegex);
     }
   };
 
@@ -153,7 +159,7 @@ export function Dashboard() {
       }
     >
       {/* ── Top Stats Row ─────────────────────────────────── */}
-      <div className="grid grid-cols-4 gap-4 mb-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="grid grid-cols-2 2xl:grid-cols-4 gap-4 mb-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
 
         {/* Total Projects */}
         <Card className="bg-[#0d1117]/60 border-border/40 flex flex-col justify-between min-h-[130px]">
@@ -256,7 +262,7 @@ export function Dashboard() {
       </div>
 
       {/* ── Bottom Two-Column Row (Balanced 50% / 50%) ─────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
 
         {/* LEFT: Recent Projects */}
         <div className="flex flex-col gap-4">
@@ -273,136 +279,141 @@ export function Dashboard() {
                 </button>
               </div>
 
-              {/* Table Header */}
-              <div className="grid grid-cols-[1fr_90px_140px_100px] gap-3 px-3 py-2 text-[11px] font-medium text-muted-foreground border-b border-border/30">
-                <span>Project</span>
-                <span>Status</span>
-                <span>Last Active</span>
-                <span className="text-right">Actions</span>
-              </div>
+              {/* Table Container for horizontal scrolling */}
+              <div className="overflow-x-auto w-full pb-2">
+                <div className="min-w-[500px]">
+                  {/* Table Header */}
+                  <div className="grid grid-cols-[1fr_90px_140px_100px] gap-3 px-3 py-2 text-[11px] font-medium text-muted-foreground border-b border-border/30">
+                    <span>Project</span>
+                    <span>Status</span>
+                    <span>Last Active</span>
+                    <span className="text-right">Actions</span>
+                  </div>
 
-              {/* Profile List */}
-              <div className="divide-y divide-border/20">
-                {allProfiles.map(profile => {
-                  const isRunning = profile.status === ProcessState.Running || profile.status === ProcessState.Starting;
-                  const style = getRuntimeStyle(profile.name + ' ' + (profile.command || ''));
+                  {/* Profile List */}
+                  <div className="divide-y divide-border/20">
+                    {allProfiles.map(profile => {
+                      const isRunning = profile.status === ProcessState.Running || profile.status === ProcessState.Starting;
+                      const style = getRuntimeStyle(profile.name + ' ' + (profile.command || ''));
 
-                  return (
-                    <div key={`${profile.projectId}-${profile.id}`} className="grid grid-cols-[1fr_90px_140px_100px] gap-3 px-3 py-3.5 items-center hover:bg-muted/10 transition-colors group">
-                      {/* Profile & Project Info */}
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <div className={cn("w-9 h-9 rounded-lg border flex items-center justify-center shrink-0", style.bg)}>
-                          <Icon name={style.icon as any} size={18} className={style.color} />
-                        </div>
-                        <div className="overflow-hidden">
-                          <p className="text-sm font-semibold text-foreground truncate group-hover:text-blue-400 transition-colors">{profile.name}</p>
-                          <p className="text-[11px] text-muted-foreground font-mono truncate">
-                            {profile.projectName}{profile.command ? ` • ${profile.command}` : ''}
-                          </p>
-                        </div>
-                      </div>
+                      return (
+                        <div key={`${profile.projectId}-${profile.id}`} className="grid grid-cols-[1fr_90px_140px_100px] gap-3 px-3 py-3.5 items-center hover:bg-muted/10 transition-colors group">
+                          {/* Profile & Project Info */}
+                          <div className="flex items-center gap-3 overflow-hidden">
+                            <div className={cn("w-9 h-9 rounded-lg border flex items-center justify-center shrink-0", style.bg)}>
+                              <Icon name={style.icon as any} size={18} className={style.color} />
+                            </div>
+                            <div className="overflow-hidden">
+                              <p className="text-sm font-semibold text-foreground truncate group-hover:text-blue-400 transition-colors">{profile.name}</p>
+                              <p className="text-[11px] text-muted-foreground font-mono truncate">
+                                {profile.projectName}{profile.command ? ` • ${profile.command}` : ''}
+                              </p>
+                            </div>
+                          </div>
 
-                      {/* Status */}
-                      <div className="flex items-center gap-1.5">
-                        <span className={cn(
-                          "w-2 h-2 rounded-full shrink-0",
-                          isRunning
-                            ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]"
-                            : "bg-slate-500"
-                        )} />
-                        <span className={cn(
-                          "text-xs",
-                          isRunning ? "font-medium text-foreground" : "text-muted-foreground"
-                        )}>
-                          {isRunning ? 'Running' : 'Stopped'}
-                        </span>
-                      </div>
+                          {/* Status */}
+                          <div className="flex items-center gap-1.5">
+                            <span className={cn(
+                              "w-2 h-2 rounded-full shrink-0",
+                              isRunning
+                                ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]"
+                                : "bg-slate-500"
+                            )} />
+                            <span className={cn(
+                              "text-xs",
+                              isRunning ? "font-medium text-foreground" : "text-muted-foreground"
+                            )}>
+                              {isRunning ? 'Running' : 'Stopped'}
+                            </span>
+                          </div>
 
-                      {/* Last Active */}
-                      <div className="text-xs font-mono text-muted-foreground">
-                        {new Date((profile as any).updatedAt || Date.now()).toLocaleString()}
-                      </div>
+                          {/* Last Active */}
+                          <div className="text-xs font-mono text-muted-foreground">
+                            {new Date((profile as any).updatedAt || Date.now()).toLocaleString()}
+                          </div>
 
-                      {/* Actions */}
-                      <div className="flex flex-col items-end gap-1 shrink-0">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className={cn(
-                            "h-7 px-3 text-xs flex items-center gap-1.5 w-[85px] justify-center transition-all",
-                            isRunning
-                              ? "bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20 hover:border-red-500/50"
-                              : "bg-[#161b22] border-border/60 hover:bg-blue-600/20 hover:border-blue-500 hover:text-blue-400 text-foreground"
-                          )}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleService(profile.projectId, profile);
-                          }}
-                        >
-                          <Icon name={isRunning ? "Square" : "Play"} size={12} className={isRunning ? "fill-red-400" : "fill-blue-400"} />
-                          <span>{isRunning ? 'Stop' : 'Run'}</span>
-                        </Button>
-
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
+                          {/* Actions */}
+                          <div className="flex flex-col items-end gap-1 shrink-0">
                             <Button
                               size="sm"
-                              variant="ghost"
-                              className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 w-[85px] justify-center"
-                            >
-                              <span>More</span>
-                              <Icon name="ChevronDown" size={11} />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" side="bottom" sideOffset={8} className="w-[180px]">
-                            <DropdownMenuItem
-                              className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-blue-500/10 hover:text-blue-400 text-left transition-colors font-medium cursor-pointer"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveTerminal({ projectId: profile.projectId, profileId: profile.id, name: profile.name });
-                              }}
-                            >
-                              <Icon name="Terminal" size={14} className="text-blue-400" />
-                              <span>Open Terminal</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-muted/40 text-left transition-colors font-medium cursor-pointer"
+                              variant="outline"
+                              className={cn(
+                                "h-7 px-3 text-xs flex items-center gap-1.5 w-[85px] justify-center transition-all",
+                                isRunning
+                                  ? "bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20 hover:border-red-500/50"
+                                  : "bg-[#161b22] border-border/60 hover:bg-blue-600/20 hover:border-blue-500 hover:text-blue-400 text-foreground"
+                              )}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 toggleService(profile.projectId, profile);
                               }}
                             >
-                              <Icon name={profile?.status === ProcessState.Running ? 'Square' : 'Play'} size={14} className={profile?.status === ProcessState.Running ? 'text-red-400' : 'text-green-400'} />
-                              <span>{profile?.status === ProcessState.Running ? 'Stop Service' : 'Start Service'}</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-muted/40 text-left transition-colors font-medium text-muted-foreground hover:text-foreground cursor-pointer"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                navigate('/workspace');
-                              }}
-                            >
-                              <Icon name="Settings2" size={14} />
-                              <span>Configure</span>
-                            </DropdownMenuItem>
-                            {profile.pid && (
-                              <div className="px-3.5 py-1.5 text-[10px] font-mono text-muted-foreground border-t border-border/30 mt-1 select-none">
-                                PID: {profile.pid}
-                              </div>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </div>
-                  );
-                })}
+                              <Icon name={isRunning ? "Square" : "Play"} size={12} className={isRunning ? "fill-red-400" : "fill-blue-400"} />
+                              <span>{isRunning ? 'Stop' : 'Run'}</span>
+                            </Button>
 
-                {allProfiles.length === 0 && (
-                  <div className="text-xs text-muted-foreground text-center py-8 italic">
-                    No profiles configured yet. Create one in Workspace.
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 w-[85px] justify-center"
+                                >
+                                  <span>More</span>
+                                  <Icon name="ChevronDown" size={11} />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" side="bottom" sideOffset={8} className="w-[180px]">
+                                <DropdownMenuItem
+                                  className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-blue-500/10 hover:text-blue-400 text-left transition-colors font-medium cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveTerminal({ projectId: profile.projectId, profileId: profile.id, name: profile.name });
+                                  }}
+                                >
+                                  <Icon name="Terminal" size={14} className="text-blue-400" />
+                                  <span>Open Terminal</span>
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-muted/40 text-left transition-colors font-medium cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleService(profile.projectId, profile);
+                                  }}
+                                >
+                                  <Icon name={profile?.status === ProcessState.Running ? 'Square' : 'Play'} size={14} className={profile?.status === ProcessState.Running ? 'text-red-400' : 'text-green-400'} />
+                                  <span>{profile?.status === ProcessState.Running ? 'Stop Service' : 'Start Service'}</span>
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-muted/40 text-left transition-colors font-medium text-muted-foreground hover:text-foreground cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    navigate('/workspace');
+                                  }}
+                                >
+                                  <Icon name="Settings2" size={14} />
+                                  <span>Configure</span>
+                                </DropdownMenuItem>
+                                {profile.pid && (
+                                  <div className="px-3.5 py-1.5 text-[10px] font-mono text-muted-foreground border-t border-border/30 mt-1 select-none">
+                                    PID: {profile.pid}
+                                  </div>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {allProfiles.length === 0 && (
+                      <div className="text-xs text-muted-foreground text-center py-8 italic">
+                        No profiles configured yet. Create one in Workspace.
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
             </div>
           </div>
@@ -429,158 +440,187 @@ export function Dashboard() {
             </div>
           </div>
 
-          {/* Table Header */}
-          <div className="grid grid-cols-[2fr_80px_100px_100px_100px_80px_40px] gap-2 px-5 py-2.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-b border-border/30 shrink-0">
-            <span>Process</span>
-            <span>PID</span>
-            <span>CPU</span>
-            <span>RAM</span>
-            <span>Status</span>
-            <span>Uptime</span>
-            <span></span>
-          </div>
+          {/* Table Container for horizontal scrolling */}
+          <div className="overflow-x-auto min-w-full flex-1 flex flex-col">
+            <div className="min-w-[600px] flex-1 flex flex-col">
+              {/* Table Header */}
+              <div className="grid grid-cols-[2fr_80px_100px_100px_100px_80px_40px] gap-2 px-5 py-2.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-b border-border/30 shrink-0">
+                <span>Process</span>
+                <span>PID</span>
+                <span>CPU</span>
+                <span>RAM</span>
+                <span>Status</span>
+                <span>Uptime</span>
+                <span></span>
+              </div>
 
-          {/* Table Rows */}
-          <div className="flex-1 overflow-y-auto">
-            {/* Rows from real process histories */}
-            {histories.map(h => {
-              const summary = summaries[h.pid];
-              const currentCpu = h.cpu[h.cpu.length - 1] || 0;
-              const currentMem = h.memory[h.memory.length - 1] || 0;
-              const healthStatus = summary?.healthStatus || 'Monitoring';
-              const healthColor = healthStatus === 'Excellent' ? 'text-green-400' :
-                healthStatus === 'Good' ? 'text-blue-400' :
-                  healthStatus === 'Warning' ? 'text-yellow-400' : 'text-red-400';
+              {/* Table Rows */}
+              <div className="w-full pb-2">
+                {/* Rows from real process histories */}
+                {histories.map(h => {
+                  const summary = summaries[h.pid];
+                  const currentCpu = h.cpu[h.cpu.length - 1] || 0;
+                  const currentMem = h.memory[h.memory.length - 1] || 0;
+                  const healthStatus = summary?.healthStatus || 'Monitoring';
+                  const healthColor = healthStatus === 'Excellent' ? 'text-green-400' :
+                    healthStatus === 'Good' ? 'text-blue-400' :
+                      healthStatus === 'Warning' ? 'text-yellow-400' : 'text-red-400';
 
-              return (
-                <div
-                  key={h.pid}
-                  className="grid grid-cols-[2fr_80px_100px_100px_100px_80px_40px] gap-2 px-5 py-3 border-b border-border/20 hover:bg-muted/10 transition-colors items-center"
-                >
-                  <div className="flex items-center gap-2.5 overflow-hidden">
-                    <div className="w-8 h-8 rounded-md bg-muted/20 flex items-center justify-center shrink-0">
-                      <Icon name="Terminal" size={14} className="text-muted-foreground" />
-                    </div>
-                    <div className="overflow-hidden">
-                      <div className="text-xs font-medium truncate">PID {h.pid}</div>
-                      <div className="text-[10px] text-muted-foreground">Process</div>
-                    </div>
-                  </div>
-                  <div className="text-xs font-mono text-muted-foreground">{h.pid}</div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-mono text-blue-400 w-10 text-right shrink-0">{currentCpu.toFixed(1)}%</span>
-                    <SparklineChart data={h.cpu.slice(-12)} color="#60a5fa" height={18} width={48} />
-                  </div>
-                  <div className="text-xs font-mono text-green-400">{formatBytes(currentMem)}</div>
-                  <div className={cn("flex items-center gap-1 text-xs font-semibold", healthColor)}>
-                    <Icon name="ShieldCheck" size={12} />
-                    {healthStatus}
-                  </div>
-                  <div className="text-[10px] text-muted-foreground">—</div>
-                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground">
-                    <Icon name="MoreVertical" size={13} />
-                  </Button>
-                </div>
-              );
-            })}
-
-            {/* Rows from workspace profiles (running) */}
-            {projects.flatMap(project =>
-              project.profiles
-                .filter(s => s.status === ProcessState.Running || s.status === ProcessState.Starting)
-                .map(profile => {
-                  const style = getRuntimeStyle(profile.command || '');
                   return (
                     <div
-                      key={`${project.id}-${profile.id}`}
+                      key={h.pid}
                       className="grid grid-cols-[2fr_80px_100px_100px_100px_80px_40px] gap-2 px-5 py-3 border-b border-border/20 hover:bg-muted/10 transition-colors items-center"
                     >
                       <div className="flex items-center gap-2.5 overflow-hidden">
-                        <div className={cn("w-8 h-8 rounded-md flex items-center justify-center shrink-0", style.bg)}>
-                          <Icon name={style.icon as any} size={14} className={style.color} />
+                        <div className="w-8 h-8 rounded-md bg-muted/20 flex items-center justify-center shrink-0">
+                          <Icon name="Terminal" size={14} className="text-muted-foreground" />
                         </div>
                         <div className="overflow-hidden">
-                          <div className="text-xs font-semibold truncate">{profile.name}</div>
-                          <div className="text-[10px] text-muted-foreground truncate">{profile.command || 'Unknown'}</div>
+                          <div className="text-xs font-medium truncate">PID {h.pid}</div>
+                          <div className="text-[10px] text-muted-foreground">Process</div>
                         </div>
                       </div>
-                      <div className="text-xs font-mono text-muted-foreground">
-                        {profile.pid ?? '—'}
+                      <div className="text-xs font-mono text-muted-foreground">{h.pid}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-mono text-blue-400 w-10 text-right shrink-0">{currentCpu.toFixed(1)}%</span>
+                        <SparklineChart data={h.cpu.slice(-12)} color="#60a5fa" height={18} width={48} />
                       </div>
-                      <div className="flex items-center gap-1">
-                        <span className="text-xs font-mono text-blue-400">0.0%</span>
-                      </div>
-                      <div className="text-xs font-mono text-green-400">—</div>
-                      <div className="flex items-center gap-1 text-xs font-semibold text-green-400">
+                      <div className="text-xs font-mono text-green-400">{formatBytes(currentMem)}</div>
+                      <div className={cn("flex items-center gap-1 text-xs font-semibold", healthColor)}>
                         <Icon name="ShieldCheck" size={12} />
-                        Excellent
+                        {healthStatus}
                       </div>
-                      <div className="text-[10px] text-muted-foreground">{formatUptime(undefined)}</div>
-                      
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground animate-none"
-                          >
-                            <Icon name="MoreVertical" size={13} />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" side="bottom" sideOffset={8} className="w-[180px]">
-                          <DropdownMenuItem
-                            className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-blue-500/10 hover:text-blue-400 text-left transition-colors font-medium cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setActiveTerminal({ projectId: project.id, profileId: profile.id, name: profile.name });
-                            }}
-                          >
-                            <Icon name="Terminal" size={14} className="text-blue-400" />
-                            <span>Open Terminal</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-muted/40 text-left transition-colors font-medium cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleService(project.id, profile);
-                            }}
-                          >
-                            <Icon name={profile?.status === ProcessState.Running ? 'Square' : 'Play'} size={14} className={profile?.status === ProcessState.Running ? 'text-red-400' : 'text-green-400'} />
-                            <span>{profile?.status === ProcessState.Running ? 'Stop Service' : 'Start Service'}</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-muted/40 text-left transition-colors font-medium text-muted-foreground hover:text-foreground cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigate('/workspace');
-                            }}
-                          >
-                            <Icon name="Settings2" size={14} />
-                            <span>Configure</span>
-                          </DropdownMenuItem>
-                          {profile.pid && (
-                            <div className="px-3.5 py-1.5 text-[10px] font-mono text-muted-foreground border-t border-border/30 mt-1 select-none">
-                              PID: {profile.pid}
-                            </div>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      <div className="text-[10px] text-muted-foreground">—</div>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground">
+                        <Icon name="MoreVertical" size={13} />
+                      </Button>
                     </div>
                   );
-                })
-            )}
+                })}
 
-            {/* Empty state */}
-            {histories.length === 0 && allServices.filter(s => s.status === ProcessState.Running).length === 0 && (
-              <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
-                <div className="w-12 h-12 rounded-full bg-muted/10 flex items-center justify-center mb-3">
-                  <Icon name="Activity" size={20} className="text-muted-foreground/50" />
-                </div>
-                <p className="text-xs">No active processes monitored</p>
-                <p className="text-[10px] mt-1 text-muted-foreground/60">Start a runtime profile to see it here</p>
+                {/* Rows from workspace profiles (running/stopping) */}
+                {projects.flatMap(project =>
+                  project.profiles
+                    .filter(s => s.status === ProcessState.Running || s.status === ProcessState.Starting || s.status === ProcessState.Stopping)
+                    .map(profile => {
+                      const style = getRuntimeStyle(profile.command || '');
+                      return (
+                        <div
+                          key={`${project.id}-${profile.id}`}
+                          className="grid grid-cols-[2fr_80px_100px_100px_100px_80px_40px] gap-2 px-5 py-3 border-b border-border/20 hover:bg-muted/10 transition-colors items-center"
+                        >
+                          <div className="flex items-center gap-2.5 overflow-hidden">
+                            <div className={cn("w-8 h-8 rounded-md flex items-center justify-center shrink-0", style.bg)}>
+                              <Icon name={style.icon as any} size={14} className={style.color} />
+                            </div>
+                            <div className="overflow-hidden">
+                              <div className="text-xs font-semibold truncate">{profile.name}</div>
+                              <div className="text-[10px] text-muted-foreground truncate">{profile.command || 'Unknown'}</div>
+                            </div>
+                          </div>
+                          <div className="text-xs font-mono text-muted-foreground">
+                            {profile.pid ?? '—'}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs font-mono text-blue-400">0.0%</span>
+                          </div>
+                          <div className="text-xs font-mono text-green-400">—</div>
+                          <div className={cn(
+                            "flex items-center gap-1 text-xs font-semibold", 
+                            profile?.status === ProcessState.Stopping ? "text-muted-foreground" :
+                            profile?.readinessState === ReadinessState.Waiting ? "text-yellow-400" : "text-green-400"
+                          )}>
+                            <Icon 
+                              name={profile?.status === ProcessState.Stopping ? "Loader2" : (profile?.readinessState === ReadinessState.Waiting ? "Loader2" : "ShieldCheck")} 
+                              size={12} 
+                              className={(profile?.readinessState === ReadinessState.Waiting || profile?.status === ProcessState.Stopping) ? "animate-spin" : ""} 
+                            />
+                            {profile?.status === ProcessState.Stopping ? "Stopping..." : (profile?.readinessState === ReadinessState.Waiting ? "Starting..." : "Ready")}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground">{formatUptime(profile.startTime)}</div>
+                          
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground animate-none"
+                              >
+                                <Icon name="MoreVertical" size={13} />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" side="bottom" sideOffset={8} className="w-[180px]">
+                              <DropdownMenuItem
+                                className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-blue-500/10 hover:text-blue-400 text-left transition-colors font-medium cursor-pointer"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveTerminal({ projectId: project.id, profileId: profile.id, name: profile.name });
+                                }}
+                              >
+                                <Icon name="Terminal" size={14} className="text-blue-400" />
+                                <span>Open Terminal</span>
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className={cn(
+                                  "flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-muted/40 text-left transition-colors font-medium cursor-pointer",
+                                  (profile.readinessState === ReadinessState.Waiting || profile.status === ProcessState.Stopping) && "opacity-50 cursor-not-allowed hover:bg-transparent"
+                                )}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (profile.readinessState === ReadinessState.Waiting || profile.status === ProcessState.Stopping) return;
+                                  toggleService(project.id, profile);
+                                }}
+                              >
+                                <Icon 
+                                  name={profile?.status === ProcessState.Stopping ? 'Loader2' : (profile?.status === ProcessState.Running ? 'Square' : 'Play')} 
+                                  size={14} 
+                                  className={cn(
+                                    profile?.status === ProcessState.Stopping && "animate-spin text-muted-foreground",
+                                    profile?.status === ProcessState.Running && 'text-red-400',
+                                    profile?.status !== ProcessState.Running && profile?.status !== ProcessState.Stopping && 'text-green-400'
+                                  )} 
+                                />
+                                <span>
+                                  {profile?.status === ProcessState.Stopping 
+                                    ? 'Stopping...' 
+                                    : (profile?.status === ProcessState.Running ? 'Stop Service' : 'Start Service')}
+                                </span>
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-muted/40 text-left transition-colors font-medium text-muted-foreground hover:text-foreground cursor-pointer"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigate('/workspace');
+                                }}
+                              >
+                                <Icon name="Settings2" size={14} />
+                                <span>Configure</span>
+                              </DropdownMenuItem>
+                              {profile.pid && (
+                                <div className="px-3.5 py-1.5 text-[10px] font-mono text-muted-foreground border-t border-border/30 mt-1 select-none">
+                                  PID: {profile.pid}
+                                </div>
+                              )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      );
+                    })
+                )}
+
+                {/* Empty state */}
+                {histories.length === 0 && allServices.filter(s => s.status === ProcessState.Running || s.status === ProcessState.Starting || s.status === ProcessState.Stopping).length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
+                    <div className="w-12 h-12 rounded-full bg-muted/10 flex items-center justify-center mb-3">
+                      <Icon name="Activity" size={20} className="text-muted-foreground/50" />
+                    </div>
+                    <p className="text-xs">No active processes monitored</p>
+                    <p className="text-[10px] mt-1 text-muted-foreground/60">Start a runtime profile to see it here</p>
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
 
           {/* Table Footer */}

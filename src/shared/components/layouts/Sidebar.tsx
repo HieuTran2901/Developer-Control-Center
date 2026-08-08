@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Icon, IconName } from '@/shared/components/ui/Icon';
 import { cn } from '@/shared/utils';
@@ -14,7 +14,20 @@ const navItems: { icon: IconName; label: string; path: string }[] = [
 ];
 
 export function Sidebar() {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(window.innerWidth >= 1366);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 1366) {
+        setIsExpanded(false);
+      } else {
+        setIsExpanded(true);
+      }
+    };
+    
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   return (
     <aside 

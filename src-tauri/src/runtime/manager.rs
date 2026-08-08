@@ -1,11 +1,10 @@
-use super::model::{ProcessModel, ProcessState};
+use super::model::{ProcessModel, ProcessState, ReadinessState};
 use super::registry::RuntimeRegistry;
 use crate::error::DesktopError;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use super::job::JobManager;
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 
@@ -18,23 +17,14 @@ pub struct ProcessManager {
     pub registry: Arc<RuntimeRegistry>,
     children: Arc<Mutex<HashMap<String, mpsc::Sender<ProcessCommand>>>>,
     app_handle: AppHandle,
-    job_manager: Arc<JobManager>,
 }
 
 impl ProcessManager {
     pub fn new(registry: Arc<RuntimeRegistry>, app_handle: AppHandle) -> Self {
-        let job_manager = match JobManager::new() {
-            Ok(jm) => Arc::new(jm),
-            Err(e) => {
-                panic!("CRITICAL: Failed to initialize Windows JobManager: {}", e);
-            }
-        };
-
         Self {
             registry,
             children: Arc::new(Mutex::new(HashMap::new())),
             app_handle,
-            job_manager,
         }
     }
 
@@ -44,6 +34,8 @@ impl ProcessManager {
         profile_id: String,
         command: String,
         cwd: String,
+        readiness_regex: Option<String>,
+        readiness_config: Option<crate::runtime::model::ReadinessStrategy>,
     ) -> Result<(), DesktopError> {
         let id = format!("{}-{}", project_id, profile_id);
 
@@ -57,6 +49,7 @@ impl ProcessManager {
             args: None,
             working_directory: cwd.clone(),
             status: ProcessState::Starting,
+            readiness: ReadinessState::Unknown,
             start_time: Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -150,17 +143,25 @@ impl ProcessManager {
         child_cmd.stdout(std::process::Stdio::piped());
         child_cmd.stderr(std::process::Stdio::piped());
 
+        #[cfg(target_os = "windows")]
+        let job_manager = crate::runtime::job::JobManager::new().ok();
+        #[cfg(not(target_os = "windows"))]
+        let job_manager = crate::runtime::job::JobManager::new().ok();
+
         match child_cmd.spawn() {
             Ok(mut child) => {
                 let pid_opt = child.id();
 
                 if let Some(pid) = pid_opt {
-                    if let Err(e) = self.job_manager.assign(pid) {
-                        println!("Job assignment failed for pid {}: {}", pid, e);
+                    if let Some(ref jm) = job_manager {
+                        if let Err(e) = jm.assign(pid) {
+                            println!("Job assignment failed for pid {}: {}", pid, e);
+                        }
                     }
                 }
 
                 model.status = ProcessState::Running;
+                model.readiness = ReadinessState::Waiting;
                 model.pid = pid_opt;
                 self.registry.add(model.clone());
 
@@ -185,60 +186,200 @@ impl ProcessManager {
                                 "projectId": p_id_started,
                                 "profileId": s_id_started,
                                 "status": "running",
+                                "readiness": "waiting",
                                 "pid": pid_opt
                             }
                         }),
                     );
                 });
 
-                let app_handle_out = self.app_handle.clone();
-                let p_id_out = project_id.clone();
-                let s_id_out = profile_id.clone();
-                if let Some(out) = stdout {
-                    tokio::spawn(async move {
-                        use tokio::io::AsyncBufReadExt;
-                        let mut reader = tokio::io::BufReader::new(out).lines();
-                        let mut buffer = Vec::new();
-                        let mut last_emit = tokio::time::Instant::now();
-                        loop {
-                            match tokio::time::timeout(tokio::time::Duration::from_millis(50), reader.next_line()).await {
-                                Ok(Ok(Some(line))) => {
-                                    buffer.push(line);
-                                    if buffer.len() >= 50 || last_emit.elapsed().as_millis() >= 50 {
-                                        let app_handle = app_handle_out.clone();
-                                        let payload = json!({
-                                            "type": "ProcessOutput",
+                let resolved_readiness = crate::runtime::readiness::ReadinessResolver::resolve(&command, readiness_regex.clone(), readiness_config);
+                
+                let regex_pattern = match &resolved_readiness {
+                    crate::runtime::model::ReadinessStrategy::LogPattern { pattern } => Some(pattern.clone()),
+                    _ => None,
+                };
+                let regex_pattern_err = regex_pattern.clone();
+                
+                let app_handle_timeout = self.app_handle.clone();
+                let p_id_timeout = project_id.clone();
+                let s_id_timeout = profile_id.clone();
+                let id_timeout = id.clone();
+                let registry_timeout = self.registry.clone();
+                
+                tokio::spawn(async move {
+                    match resolved_readiness {
+                        crate::runtime::model::ReadinessStrategy::None => {
+                            // If strategy is None, just set it to ready immediately
+                            if let Some(mut m) = registry_timeout.find_by_id(&id_timeout) {
+                                if m.status == ProcessState::Running && m.readiness == ReadinessState::Waiting {
+                                    m.readiness = ReadinessState::Ready;
+                                    registry_timeout.add(m);
+                                    let _ = app_handle_timeout.emit(
+                                        "process_event",
+                                        json!({
+                                            "type": "ProcessReadinessChanged",
                                             "payload": {
-                                                "projectId": p_id_out.clone(),
-                                                "profileId": s_id_out.clone(),
-                                                "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
-                                                "streamType": "stdout",
-                                                "message": buffer.join("\n")
+                                                "projectId": p_id_timeout,
+                                                "profileId": s_id_timeout,
+                                                "readiness": "ready"
                                             }
-                                        });
-                                        tokio::spawn(async move { let _ = app_handle.emit("process_event", payload); });
-                                        buffer.clear();
-                                        last_emit = tokio::time::Instant::now();
-                                    }
+                                        }),
+                                    );
                                 }
-                                Ok(Ok(None)) | Ok(Err(_)) => {
-                                    if !buffer.is_empty() {
-                                        let app_handle = app_handle_out.clone();
-                                        let payload = json!({
-                                            "type": "ProcessOutput",
-                                            "payload": {
-                                                "projectId": p_id_out.clone(),
-                                                "profileId": s_id_out.clone(),
-                                                "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
-                                                "streamType": "stdout",
-                                                "message": buffer.join("\n")
-                                            }
-                                        });
-                                        tokio::spawn(async move { let _ = app_handle.emit("process_event", payload); });
+                            }
+                        }
+                        crate::runtime::model::ReadinessStrategy::Port { port } => {
+                            // Poll port
+                            let mut attempts = 0;
+                            while attempts < 150 { // wait up to 150 * 200ms = 30 seconds
+                                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                                if let Ok(_stream) = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port)).await {
+                                    if let Some(mut m) = registry_timeout.find_by_id(&id_timeout) {
+                                        if m.status == ProcessState::Running && m.readiness == ReadinessState::Waiting {
+                                            m.readiness = ReadinessState::Ready;
+                                            registry_timeout.add(m);
+                                            let _ = app_handle_timeout.emit(
+                                                "process_event",
+                                                json!({
+                                                    "type": "ProcessReadinessChanged",
+                                                    "payload": {
+                                                        "projectId": p_id_timeout,
+                                                        "profileId": s_id_timeout,
+                                                        "readiness": "ready"
+                                                    }
+                                                }),
+                                            );
+                                        }
                                     }
                                     break;
                                 }
-                                Err(_) => {
+                                attempts += 1;
+                            }
+                        }
+                        crate::runtime::model::ReadinessStrategy::Http { path: _ } => {
+                            // Http polling is not implemented properly yet, just wait for port 8080 or rely on fallback
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            if let Some(mut m) = registry_timeout.find_by_id(&id_timeout) {
+                                if m.status == ProcessState::Running && m.readiness == ReadinessState::Waiting {
+                                    m.readiness = ReadinessState::Ready;
+                                    registry_timeout.add(m);
+                                    let _ = app_handle_timeout.emit(
+                                        "process_event",
+                                        json!({
+                                            "type": "ProcessReadinessChanged",
+                                            "payload": {
+                                                "projectId": p_id_timeout,
+                                                "profileId": s_id_timeout,
+                                                "readiness": "ready"
+                                            }
+                                        }),
+                                    );
+                                }
+                            }
+                        }
+                        crate::runtime::model::ReadinessStrategy::LogPattern { .. } => {
+                            // Handled in the log streams
+                        }
+                    }
+                });
+
+                let registry_out = self.registry.clone();
+                let id_out = id.clone();
+                let app_handle_out = self.app_handle.clone();
+                let p_id_out = project_id.clone();
+                let s_id_out = profile_id.clone();
+                if let Some(mut out) = stdout {
+                    tokio::spawn(async move {
+                        use tokio::io::AsyncReadExt;
+                        let mut read_buf = [0u8; 2048];
+                        let mut buffer = Vec::new();
+                        let mut readiness_buffer = String::new();
+                        let mut last_emit = tokio::time::Instant::now();
+                        let mut regex = regex_pattern.and_then(|p| regex::Regex::new(&p).ok());
+                        
+                        loop {
+                            tokio::select! {
+                                res = out.read(&mut read_buf) => {
+                                    match res {
+                                        Ok(0) => {
+                                            // EOF
+                                            if !buffer.is_empty() {
+                                                let app_handle = app_handle_out.clone();
+                                                let payload = json!({
+                                                    "type": "ProcessOutput",
+                                                    "payload": {
+                                                        "projectId": p_id_out.clone(),
+                                                        "profileId": s_id_out.clone(),
+                                                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+                                                        "streamType": "stdout",
+                                                        "message": buffer.join("")
+                                                    }
+                                                });
+                                                tokio::spawn(async move { let _ = app_handle.emit("process_event", payload); });
+                                            }
+                                            break;
+                                        }
+                                        Ok(n) => {
+                                            let chunk = String::from_utf8_lossy(&read_buf[..n]).into_owned();
+                                            
+                                            // Readiness check
+                                            if let Some(ref re) = regex {
+                                                readiness_buffer.push_str(&chunk);
+                                                let clean_line = crate::runtime::ansi::strip_ansi(&readiness_buffer);
+                                                if re.is_match(&clean_line) {
+                                                    if let Some(mut m) = registry_out.find_by_id(&id_out) {
+                                                        if m.status == ProcessState::Running && m.readiness == ReadinessState::Waiting {
+                                                            m.readiness = ReadinessState::Ready;
+                                                            registry_out.add(m);
+                                                            let _ = app_handle_out.emit(
+                                                                "process_event",
+                                                                json!({
+                                                                    "type": "ProcessReadinessChanged",
+                                                                    "payload": {
+                                                                        "projectId": p_id_out,
+                                                                        "profileId": s_id_out,
+                                                                        "readiness": "ready"
+                                                                    }
+                                                                }),
+                                                            );
+                                                        }
+                                                    }
+                                                    regex = None; // Stop checking
+                                                }
+                                                // Prevent buffer from growing infinitely
+                                                if readiness_buffer.len() > 2048 {
+                                                    let keep_len = 1024;
+                                                    let new_start = readiness_buffer.len() - keep_len;
+                                                    let kept = readiness_buffer[new_start..].to_string();
+                                                    readiness_buffer = kept;
+                                                }
+                                            }
+                                            
+                                            buffer.push(chunk);
+                                            if buffer.len() >= 50 || last_emit.elapsed().as_millis() >= 50 {
+                                                let app_handle = app_handle_out.clone();
+                                                let payload = json!({
+                                                    "type": "ProcessOutput",
+                                                    "payload": {
+                                                        "projectId": p_id_out.clone(),
+                                                        "profileId": s_id_out.clone(),
+                                                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+                                                        "streamType": "stdout",
+                                                        "message": buffer.join("")
+                                                    }
+                                                });
+                                                tokio::spawn(async move { let _ = app_handle.emit("process_event", payload); });
+                                                buffer.clear();
+                                                last_emit = tokio::time::Instant::now();
+                                            }
+                                        }
+                                        Err(_) => {
+                                            break; // Stream error
+                                        }
+                                    }
+                                }
+                                _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => {
                                     if !buffer.is_empty() {
                                         let app_handle = app_handle_out.clone();
                                         let payload = json!({
@@ -248,7 +389,7 @@ impl ProcessManager {
                                                 "profileId": s_id_out.clone(),
                                                 "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
                                                 "streamType": "stdout",
-                                                "message": buffer.join("\n")
+                                                "message": buffer.join("")
                                             }
                                         });
                                         tokio::spawn(async move { let _ = app_handle.emit("process_event", payload); });
@@ -261,37 +402,102 @@ impl ProcessManager {
                     });
                 }
 
+                let registry_err = self.registry.clone();
+                let id_err = id.clone();
                 let app_handle_err = self.app_handle.clone();
                 let p_id_err = project_id.clone();
                 let s_id_err = profile_id.clone();
-                if let Some(err) = stderr {
+                if let Some(mut err) = stderr {
                     tokio::spawn(async move {
-                        use tokio::io::AsyncBufReadExt;
-                        let mut reader = tokio::io::BufReader::new(err).lines();
+                        use tokio::io::AsyncReadExt;
+                        let mut read_buf = [0u8; 2048];
                         let mut buffer = Vec::new();
+                        let mut readiness_buffer = String::new();
                         let mut last_emit = tokio::time::Instant::now();
+                        let mut regex = regex_pattern_err.and_then(|p| regex::Regex::new(&p).ok());
+                        
                         loop {
-                            match tokio::time::timeout(tokio::time::Duration::from_millis(50), reader.next_line()).await {
-                                Ok(Ok(Some(line))) => {
-                                    buffer.push(line);
-                                    if buffer.len() >= 50 || last_emit.elapsed().as_millis() >= 50 {
-                                        let app_handle = app_handle_err.clone();
-                                        let payload = json!({
-                                            "type": "ProcessErrorOutput",
-                                            "payload": {
-                                                "projectId": p_id_err.clone(),
-                                                "profileId": s_id_err.clone(),
-                                                "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
-                                                "streamType": "stderr",
-                                                "message": buffer.join("\n")
+                            tokio::select! {
+                                res = err.read(&mut read_buf) => {
+                                    match res {
+                                        Ok(0) => {
+                                            // EOF
+                                            if !buffer.is_empty() {
+                                                let app_handle = app_handle_err.clone();
+                                                let payload = json!({
+                                                    "type": "ProcessErrorOutput",
+                                                    "payload": {
+                                                        "projectId": p_id_err.clone(),
+                                                        "profileId": s_id_err.clone(),
+                                                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+                                                        "streamType": "stderr",
+                                                        "message": buffer.join("")
+                                                    }
+                                                });
+                                                tokio::spawn(async move { let _ = app_handle.emit("process_event", payload); });
                                             }
-                                        });
-                                        tokio::spawn(async move { let _ = app_handle.emit("process_event", payload); });
-                                        buffer.clear();
-                                        last_emit = tokio::time::Instant::now();
+                                            break;
+                                        }
+                                        Ok(n) => {
+                                            let chunk = String::from_utf8_lossy(&read_buf[..n]).into_owned();
+                                            
+                                            // Readiness check
+                                            if let Some(ref re) = regex {
+                                                readiness_buffer.push_str(&chunk);
+                                                let clean_line = crate::runtime::ansi::strip_ansi(&readiness_buffer);
+                                                if re.is_match(&clean_line) {
+                                                    if let Some(mut m) = registry_err.find_by_id(&id_err) {
+                                                        if m.status == ProcessState::Running && m.readiness == ReadinessState::Waiting {
+                                                            m.readiness = ReadinessState::Ready;
+                                                            registry_err.add(m);
+                                                            let _ = app_handle_err.emit(
+                                                                "process_event",
+                                                                json!({
+                                                                    "type": "ProcessReadinessChanged",
+                                                                    "payload": {
+                                                                        "projectId": p_id_err,
+                                                                        "profileId": s_id_err,
+                                                                        "readiness": "ready"
+                                                                    }
+                                                                }),
+                                                            );
+                                                        }
+                                                    }
+                                                    regex = None; // Stop checking
+                                                }
+                                                // Prevent buffer from growing infinitely
+                                                if readiness_buffer.len() > 2048 {
+                                                    let keep_len = 1024;
+                                                    let new_start = readiness_buffer.len() - keep_len;
+                                                    let kept = readiness_buffer[new_start..].to_string();
+                                                    readiness_buffer = kept;
+                                                }
+                                            }
+                                            
+                                            buffer.push(chunk);
+                                            if buffer.len() >= 50 || last_emit.elapsed().as_millis() >= 50 {
+                                                let app_handle = app_handle_err.clone();
+                                                let payload = json!({
+                                                    "type": "ProcessErrorOutput",
+                                                    "payload": {
+                                                        "projectId": p_id_err.clone(),
+                                                        "profileId": s_id_err.clone(),
+                                                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+                                                        "streamType": "stderr",
+                                                        "message": buffer.join("")
+                                                    }
+                                                });
+                                                tokio::spawn(async move { let _ = app_handle.emit("process_event", payload); });
+                                                buffer.clear();
+                                                last_emit = tokio::time::Instant::now();
+                                            }
+                                        }
+                                        Err(_) => {
+                                            break; // Stream error
+                                        }
                                     }
                                 }
-                                Ok(Ok(None)) | Ok(Err(_)) => {
+                                _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => {
                                     if !buffer.is_empty() {
                                         let app_handle = app_handle_err.clone();
                                         let payload = json!({
@@ -301,24 +507,7 @@ impl ProcessManager {
                                                 "profileId": s_id_err.clone(),
                                                 "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
                                                 "streamType": "stderr",
-                                                "message": buffer.join("\n")
-                                            }
-                                        });
-                                        tokio::spawn(async move { let _ = app_handle.emit("process_event", payload); });
-                                    }
-                                    break;
-                                }
-                                Err(_) => {
-                                    if !buffer.is_empty() {
-                                        let app_handle = app_handle_err.clone();
-                                        let payload = json!({
-                                            "type": "ProcessErrorOutput",
-                                            "payload": {
-                                                "projectId": p_id_err.clone(),
-                                                "profileId": s_id_err.clone(),
-                                                "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
-                                                "streamType": "stderr",
-                                                "message": buffer.join("\n")
+                                                "message": buffer.join("")
                                             }
                                         });
                                         tokio::spawn(async move { let _ = app_handle.emit("process_event", payload); });
@@ -338,6 +527,8 @@ impl ProcessManager {
                 let actor_id = id.clone();
 
                 tokio::spawn(async move {
+                    let _job_manager = job_manager; // Move JobManager into actor task to tie its lifetime to the actor
+                    
                     tokio::select! {
                         status_res = child.wait() => {
                             let exit_code = status_res.ok().and_then(|s| s.code()).unwrap_or(-1);
@@ -352,6 +543,7 @@ impl ProcessManager {
                                 } else {
                                     ProcessState::Failed
                                 };
+                                m.readiness = ReadinessState::Unknown;
                                 m.stop_time = Some(
                                     std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
@@ -368,7 +560,8 @@ impl ProcessManager {
                                 "payload": {
                                     "projectId": project_id.clone(),
                                     "profileId": profile_id.clone(),
-                                    "exitCode": exit_code
+                                    "exitCode": exit_code,
+                                    "pid": pid_opt
                                 }
                             }));
                         }
@@ -399,6 +592,7 @@ impl ProcessManager {
                                 // 1. Update Registry First (Source of Truth)
                                 if let Some(mut m) = actor_registry.find_by_id(&actor_id) {
                                     m.status = ProcessState::Stopped; // Explicitly set to Stopped for manual termination
+                                    m.readiness = ReadinessState::Unknown;
                                     m.stop_time = Some(
                                         std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
@@ -415,7 +609,8 @@ impl ProcessManager {
                                     "payload": {
                                         "projectId": project_id.clone(),
                                         "profileId": profile_id.clone(),
-                                        "exitCode": exit_code
+                                        "exitCode": exit_code,
+                                        "pid": pid_opt
                                     }
                                 }));
                             }
@@ -487,6 +682,8 @@ impl ProcessManager {
         profile_id: String,
         command: String,
         cwd: String,
+        readiness_regex: Option<String>,
+        readiness_config: Option<crate::runtime::model::ReadinessStrategy>,
     ) -> Result<(), DesktopError> {
         let id = format!("{}-{}", project_id, profile_id);
         
@@ -522,7 +719,7 @@ impl ProcessManager {
 
         // Delay to allow OS ports to be fully released
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        self.start(project_id, profile_id, command, cwd).await
+        self.start(project_id, profile_id, command, cwd, readiness_regex, readiness_config).await
     }
 
     pub async fn shutdown(&self) {

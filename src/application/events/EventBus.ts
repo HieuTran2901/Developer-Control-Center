@@ -8,6 +8,7 @@ export enum EventType {
   ProcessExited = 'PROCESS_EXITED',
   ProcessRestarting = 'PROCESS_RESTARTING',
   ProcessRestarted = 'PROCESS_RESTARTED',
+  ProcessReadinessChanged = 'PROCESS_READINESS_CHANGED',
   ZombieDetected = 'ZOMBIE_DETECTED',
   RegistryCleaned = 'REGISTRY_CLEANED',
   ProcessOutput = 'PROCESS_OUTPUT',

@@ -1,4 +1,4 @@
-﻿import { IRuntimeService } from '../interfaces/services/IRuntimeService';
+import { IRuntimeService } from '../interfaces/services/IRuntimeService';
 import { IRuntimeRegistry } from '../interfaces/services/IRuntimeRegistry';
 import { IDesktopGateway } from '../interfaces/gateways/IDesktopGateway';
 import { ProcessModel } from '@/domain/entities/ProcessModel';
@@ -11,8 +11,9 @@ export class MockRuntimeService implements IRuntimeService {
     private desktopGateway: IDesktopGateway
   ) {}
 
-  async start(projectId: string, profileId: string, command: string, workingDirectory: string): Promise<void> {
+  async start(projectId: string, profileId: string, command: string, workingDirectory: string, readinessRegex?: string, readinessConfig?: any): Promise<void> {
     const id = `${projectId}-${profileId}`;
+    console.log(`Starting mock process with command: ${command}, cwd: ${workingDirectory}, readinessRegex: ${readinessRegex}, readinessConfig:`, readinessConfig);
     
     const process: ProcessModel = {
       id,
@@ -25,18 +26,22 @@ export class MockRuntimeService implements IRuntimeService {
     };
     
     this.registry.add(process);
-    
     EventBus.publish(EventType.ProcessStarting, { projectId, profileId });
     
-    // Simulate Gateway call
     await this.desktopGateway.startProcess({ projectId, profileId });
-    
+
     setTimeout(() => {
-      this.registry.update(id, {
-        status: ProcessState.Running,
-        pid: Math.floor(Math.random() * 10000) + 1000
-      });
-      EventBus.publish(EventType.ProcessStarted, { projectId, profileId, status: ProcessState.Running });
+      // Import ReadinessState here or assume it's imported (wait, let's just use string values if needed, or rely on import if we add it)
+      this.registry.update(id, { status: ProcessState.Running, readiness: 'waiting' as any, pid: Math.floor(Math.random() * 10000) + 1000 });
+      EventBus.publish(EventType.ProcessStarted, { projectId, profileId, status: ProcessState.Running, readiness: 'waiting', pid: Math.floor(Math.random() * 10000) });
+    }, 500);
+
+    setTimeout(() => {
+      const process = this.registry.findById(id);
+      if (process?.status === ProcessState.Running && process.readiness === 'waiting') {
+        this.registry.update(id, { readiness: 'ready' as any });
+        EventBus.publish(EventType.ProcessReadinessChanged, { projectId, profileId, readiness: 'ready' });
+      }
     }, 2000);
   }
 
@@ -65,7 +70,8 @@ export class MockRuntimeService implements IRuntimeService {
     }
   }
 
-  async restart(projectId: string, profileId: string): Promise<void> {
+  async restart(projectId: string, profileId: string, command: string, workingDirectory: string, readinessRegex?: string): Promise<void> {
+    console.log(`Restarting mock process with command: ${command}, cwd: ${workingDirectory}, readinessRegex: ${readinessRegex}`);
     const id = `${projectId}-${profileId}`;
     this.registry.update(id, { status: ProcessState.Restarting });
     EventBus.publish(EventType.ProcessRestarted, { projectId, profileId });
