@@ -213,11 +213,11 @@ npm run tauri dev
 - [ ] Hỗ trợ cấu hình Multi-workspace.
 
 ### Error Handling & Validation
-M?i l?i t? Rust du?c chu?n h�a qua DesktopError Struct (Rust) sang DesktopError DTO (TypeScript):
-`	ypescript
+Mọi lỗi từ Rust được chuẩn hóa qua DesktopError Struct (Rust) sang DesktopError DTO (TypeScript):
+```typescript
 export interface DesktopError {
   kind: 'ValidationError' | 'PermissionError' | 'UnknownError';
   message: string;
 }
-`
-�i?u n�y d?m b?o Frontend lu�n nh?n du?c error object c?u tr�c r� r�ng thay v� c�c string l?i th�.
+```
+Điều này đảm bảo Frontend luôn nhận được error object cấu trúc rõ ràng thay vì các string lỗi thô.
