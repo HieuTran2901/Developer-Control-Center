@@ -9,6 +9,7 @@ const navItems: { icon: IconName; label: string; path: string }[] = [
   { icon: 'Activity', label: 'Processes', path: '/processes' },
   { icon: 'Terminal', label: 'Terminal', path: '/terminal' },
   { icon: 'List', label: 'Logs', path: '/logs' },
+  { icon: 'Shield', label: 'Security', path: '/security' },
   { icon: 'Settings', label: 'Settings', path: '/settings' },
   { icon: 'Info', label: 'About', path: '/about' },
 ];

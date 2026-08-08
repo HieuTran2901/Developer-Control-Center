@@ -28,6 +28,8 @@ tokio = { version = "1", features = ["process", "rt-multi-thread", "sync", "macr
 tauri-plugin-dialog = "2"
 sysinfo = "0.39.6"
 regex = "1.13.1"
+reqwest = { version = "0.13.4", features = ["json", "rustls"] }
+quick-xml = { version = "0.41.0", features = ["serialize"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

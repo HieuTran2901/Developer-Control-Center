@@ -21,7 +21,13 @@ export enum EventType {
   ResourceUpdated = 'ResourceUpdated',
   HistoryMetricsUpdated = 'HISTORY_METRICS_UPDATED',
   AlertTriggered = 'ALERT_TRIGGERED',
-  PerformanceSummaryUpdated = 'PERFORMANCE_SUMMARY_UPDATED'
+  PerformanceSummaryUpdated = 'PERFORMANCE_SUMMARY_UPDATED',
+  SecurityScanStarted = 'SecurityScanStarted',
+  SecurityScanProgress = 'SecurityScanProgress',
+  SecurityFindingsChunkDetected = 'SecurityFindingsChunkDetected',
+  SecurityScanCompleted = 'SecurityScanCompleted',
+  SecurityScanFailed = 'SecurityScanFailed',
+  SecurityScanCancelled = 'SecurityScanCancelled'
 }
 
 export type EventHandler<T = any> = (payload: T) => void;
