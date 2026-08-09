@@ -9,6 +9,7 @@ use crate::security::scanner::SecurityScanner;
 use crate::security::secret_scanner::CoreSecretScanner;
 use crate::security::dependency_scanner::scanner::DependencyScanner;
 use crate::security::dependency_scanner::osv::OsvProvider;
+use crate::security::configuration_scanner::scanner::ConfigurationScanner;
 use crate::security::redactor::{SecurityRedactor, DefaultRedactor};
 use std::collections::HashSet;
 
@@ -28,6 +29,8 @@ impl SecurityEngine {
         let osv_provider = Arc::new(OsvProvider::new());
         engine.register_scanner(Arc::new(DependencyScanner::new(osv_provider)));
         
+        engine.register_scanner(Arc::new(ConfigurationScanner::new()));
+
         engine
     }
 
@@ -167,7 +170,6 @@ impl SecurityEngine {
 
                 for scanner in &scanners {
                     if cancel_token.load(Ordering::Relaxed) {
-                        let _ = app_handle.emit("security_event", SecurityScanEvent::Cancelled { scan_id: scan_id_clone });
                         return;
                     }
 
