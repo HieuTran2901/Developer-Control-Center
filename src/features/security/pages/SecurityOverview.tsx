@@ -1,21 +1,82 @@
 import { useEffect, useState } from 'react';
-import { Play, Square, Shield, AlertTriangle } from 'lucide-react';
 import { useWorkspace } from '@/shared/hooks/useWorkspace';
 import { securityService } from '@/application/services/SecurityService';
 import { EventBus, EventType } from '@/application/events/EventBus';
-import { SecurityFinding, SecurityScanStatus, SecurityScanSummary } from '@/domain/entities/SecurityFinding';
+import { SecurityFinding, SecurityScanStatus, SecurityScanSummary, SecurityScanMode } from '@/domain/entities/SecurityFinding';
+import { open } from '@tauri-apps/plugin-dialog';
+
+import { SecurityHeader } from '../components/SecurityHeader';
+import { SecurityScanTarget } from '../components/SecurityScanTarget';
+import { SecurityStatusMetrics } from '../components/SecurityStatusMetrics';
+import { SecurityTabs } from '../components/SecurityTabs';
+import { SecurityActiveFindings } from '../components/SecurityActiveFindings';
+import { SecurityCapabilities } from '../components/SecurityCapabilities';
 
 export function SecurityOverview() {
-  const { workspace } = useWorkspace();
-  const currentProject = workspace?.projects?.[0];
-  const [status, setStatus] = useState<SecurityScanStatus>('IDLE');
-  const [scanId, setScanId] = useState<string | null>(null);
-  const [progress, setProgress] = useState({ scannedFiles: 0, currentScanner: '' });
-  const [findings, setFindings] = useState<SecurityFinding[]>([]);
-  const [, setSummary] = useState<SecurityScanSummary | null>(null);
+  const { workspace, session, updateSession } = useWorkspace();
+
+  // Selected Target Resolution Logic:
+  // 1. SecurityService cached target (user explicitly changed target during this session)
+  // 2. session.selectedProjectId -> match in workspace.projects
+  // 3. Fallback to workspace.projects[0]
+  const initialCache = securityService.getState();
+
+  const [selectedTarget, setSelectedTarget] = useState<{ name: string; path: string; id?: string } | null>(() => {
+    if (initialCache.activeTarget) {
+      return initialCache.activeTarget;
+    }
+    if (session?.selectedProjectId && workspace?.projects) {
+      const match = workspace.projects.find(p => p.id === session.selectedProjectId);
+      if (match) {
+        return { name: match.name, path: match.rootPath, id: match.id };
+      }
+    }
+    if (workspace?.projects && workspace.projects.length > 0) {
+      const first = workspace.projects[0];
+      return { name: first.name, path: first.rootPath, id: first.id };
+    }
+    return null;
+  });
+
+  // Keep SecurityService activeTarget in sync whenever selectedTarget changes
+  const activeTarget = selectedTarget;
+
+  useEffect(() => {
+    // If workspace loads asynchronously and no target was set yet, resolve from workspace/session
+    if (!selectedTarget && workspace?.projects && workspace.projects.length > 0) {
+      let resolved = null;
+      if (session?.selectedProjectId) {
+        const match = workspace.projects.find(p => p.id === session.selectedProjectId);
+        if (match) {
+          resolved = { name: match.name, path: match.rootPath, id: match.id };
+        }
+      }
+      if (!resolved) {
+        const first = workspace.projects[0];
+        resolved = { name: first.name, path: first.rootPath, id: first.id };
+      }
+      setSelectedTarget(resolved);
+      securityService.setSelectedTarget(resolved);
+    }
+  }, [workspace, session, selectedTarget]);
+
+  // Restored Scan States from SecurityService Singleton
+  const [status, setStatus] = useState<SecurityScanStatus>(initialCache.status);
+  const [scanId, setScanId] = useState<string | null>(initialCache.scanId);
+  const [progress, setProgress] = useState(initialCache.progress);
+  const [findings, setFindings] = useState<SecurityFinding[]>(initialCache.findings);
+  const [, setSummary] = useState<SecurityScanSummary | null>(initialCache.summary);
+  const [activeTab, setActiveTab] = useState<'overview' | 'history'>('overview');
+  const [scanMode, setScanMode] = useState<SecurityScanMode>(initialCache.scanMode);
+
+  const handleScanModeChange = (mode: SecurityScanMode) => {
+    setScanMode(mode);
+    securityService.setScanMode(mode);
+  };
 
   useEffect(() => {
     const unsubStarted = EventBus.subscribe(EventType.SecurityScanStarted, (payload: { projectId: string; scanId: string }) => {
+      console.log('[SecurityOverview] Received Started', payload);
       setStatus('SCANNING');
       setScanId(payload.scanId);
       setFindings([]);
@@ -24,34 +85,29 @@ export function SecurityOverview() {
     });
 
     const unsubProgress = EventBus.subscribe(EventType.SecurityScanProgress, (payload: { scanId: string; scannedFiles: number; currentScanner: string }) => {
-      if (payload.scanId === scanId) {
-        setProgress({ scannedFiles: payload.scannedFiles, currentScanner: payload.currentScanner });
-      }
+      console.log('[SecurityOverview] Received Progress', payload, 'current scanId state:', scanId);
+      setProgress({ scannedFiles: payload.scannedFiles, currentScanner: payload.currentScanner });
     });
 
     const unsubFinding = EventBus.subscribe(EventType.SecurityFindingsChunkDetected, (payload: { scanId: string; findings: SecurityFinding[] }) => {
-      if (payload.scanId === scanId) {
-        setFindings(prev => [...prev, ...payload.findings]);
-      }
+      console.log('[SecurityOverview] Received FindingsChunk', payload.findings.length);
+      setFindings(prev => [...prev, ...payload.findings]);
     });
 
     const unsubCompleted = EventBus.subscribe(EventType.SecurityScanCompleted, (payload: { scanId: string; summary: SecurityScanSummary }) => {
-      if (payload.scanId === scanId) {
-        setStatus('COMPLETED');
-        setSummary(payload.summary);
-      }
+      console.log('[SecurityOverview] Received Completed', payload);
+      setStatus('COMPLETED');
+      setSummary(payload.summary);
     });
 
     const unsubFailed = EventBus.subscribe(EventType.SecurityScanFailed, (payload: { scanId: string; reason: string }) => {
-      if (payload.scanId === scanId) {
-        setStatus('FAILED');
-      }
+      console.log('[SecurityOverview] Received Failed', payload);
+      setStatus('FAILED');
     });
 
     const unsubCancelled = EventBus.subscribe(EventType.SecurityScanCancelled, (payload: { scanId: string }) => {
-      if (payload.scanId === scanId) {
-        setStatus('CANCELLED');
-      }
+      console.log('[SecurityOverview] Received Cancelled', payload);
+      setStatus('CANCELLED');
     });
 
     return () => {
@@ -64,12 +120,32 @@ export function SecurityOverview() {
     };
   }, [scanId]);
 
-  const handleStartScan = async () => {
-    if (!currentProject) return;
+  const handleChangeTarget = async () => {
     try {
-      const id = await securityService.startSecurityScan(currentProject.id, currentProject.rootPath);
-      setScanId(id);
-      setStatus('SCANNING');
+      const selectedPath = await open({
+        directory: true,
+        multiple: false,
+      });
+      if (selectedPath && typeof selectedPath === 'string') {
+        const name = selectedPath.split(/[/\\]/).pop() || selectedPath;
+        const matchedProj = workspace?.projects?.find(p => p.rootPath.toLowerCase() === selectedPath.toLowerCase());
+        const newTarget = { name, path: selectedPath, id: matchedProj?.id };
+        setSelectedTarget(newTarget);
+        securityService.setSelectedTarget(newTarget);
+        if (matchedProj) {
+          updateSession({ selectedProjectId: matchedProj.id });
+        }
+      }
+    } catch (e) {
+      console.error('Failed to open dialog', e);
+    }
+  };
+
+  const handleStartScan = async () => {
+    if (!activeTarget) return;
+    try {
+      const projectId = (activeTarget as any).id || 'custom-target';
+      await securityService.startSecurityScan(projectId, activeTarget.path, scanMode);
     } catch (e) {
       console.error(e);
     }
@@ -81,117 +157,56 @@ export function SecurityOverview() {
     }
   };
 
-  if (!currentProject) {
-    return (
-      <div className="flex h-full items-center justify-center text-muted-foreground">
-        Please select a project first.
-      </div>
-    );
-  }
-
   return (
-    <div className="p-6 h-full flex flex-col space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-            <Shield className="w-6 h-6 text-primary" />
-            Security Center
-          </h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            Static security analysis for {currentProject.name}
-          </p>
-        </div>
-        
-        {status === 'SCANNING' ? (
-          <button 
-            onClick={handleCancelScan}
-            className="flex items-center gap-2 px-4 py-2 bg-destructive/10 text-destructive hover:bg-destructive/20 rounded-md transition-colors"
-          >
-            <Square className="w-4 h-4 fill-current" />
-            Cancel Scan
-          </button>
-        ) : (
-          <button 
-            onClick={handleStartScan}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md transition-colors"
-          >
-            <Play className="w-4 h-4 fill-current" />
-            Run Security Scan
-          </button>
+    <div className="flex flex-col h-full w-full max-w-7xl mx-auto">
+      <div className="flex-1 w-full min-h-0 flex flex-col p-4 sm:p-6 lg:p-8 space-y-6">
+        <SecurityHeader 
+          activeTargetName={activeTarget ? activeTarget.name : 'Unknown'}
+          status={status}
+          onRunScan={handleStartScan}
+          onCancelScan={handleCancelScan}
+          hasTarget={!!activeTarget}
+        />
+
+        <SecurityScanTarget 
+          activeTarget={activeTarget}
+          onChangeTarget={handleChangeTarget}
+          scanMode={scanMode}
+          onScanModeChange={handleScanModeChange}
+          isScanning={status === 'SCANNING'}
+        />
+
+        <SecurityStatusMetrics 
+          status={status}
+          findingsCount={findings.length}
+          scannedFiles={progress.scannedFiles}
+        />
+
+        <SecurityTabs 
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+        />
+
+        {activeTab === 'overview' && (
+          <>
+            <SecurityActiveFindings 
+              findings={findings}
+              status={status}
+              onRunScan={handleStartScan}
+              hasTarget={!!activeTarget}
+            />
+
+            <SecurityCapabilities />
+          </>
         )}
-      </div>
 
-      <div className="grid grid-cols-4 gap-4">
-        <div className="bg-surface border border-border p-4 rounded-lg flex flex-col">
-          <span className="text-sm text-muted-foreground font-medium uppercase">Status</span>
-          <span className="text-xl font-bold mt-1">{status}</span>
-          {status === 'SCANNING' && (
-            <span className="text-xs text-muted-foreground mt-2">{progress.scannedFiles} files scanned</span>
-          )}
-        </div>
-        <div className="bg-surface border border-border p-4 rounded-lg flex flex-col">
-          <span className="text-sm text-muted-foreground font-medium uppercase">Findings</span>
-          <span className="text-xl font-bold mt-1 text-warning">{findings.length}</span>
-        </div>
-      </div>
-
-      <div className="flex-1 bg-surface border border-border rounded-lg overflow-hidden flex flex-col">
-        <div className="border-b border-border p-4 flex justify-between items-center bg-surface-hover/50">
-          <h3 className="font-semibold flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-warning" />
-            Active Findings
-          </h3>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4">
-          {findings.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-              <Shield className="w-12 h-12 mb-4 text-border" />
-              <p>No vulnerabilities detected yet.</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {findings.map((f, i) => {
-                const isDependency = f.category === 'DEPENDENCY' || (f.metadata && f.metadata.type === 'Dependency');
-                const meta = f.metadata?.type === 'Dependency' ? f.metadata.data : null;
-                
-                return (
-                  <div key={i} className="p-3 border border-border rounded-md bg-background">
-                    <div className="flex justify-between">
-                      <span className="font-medium text-destructive">
-                        {isDependency && meta ? `${meta.packageName} (${meta.version}) - ${f.title}` : f.title}
-                      </span>
-                      <div className="flex gap-2">
-                        {isDependency && meta && (
-                          <span className="text-xs uppercase bg-primary/10 text-primary px-2 py-1 rounded border border-primary/20">
-                            {meta.ecosystem}
-                          </span>
-                        )}
-                        <span className="text-xs uppercase bg-destructive/10 text-destructive px-2 py-1 rounded">
-                          {f.severity}
-                        </span>
-                      </div>
-                    </div>
-                    <p className="text-sm text-muted-foreground mt-1">{f.description}</p>
-                    
-                    {isDependency && meta ? (
-                      <div className="text-xs text-muted-foreground mt-2 font-mono bg-surface p-2 rounded flex flex-col gap-1">
-                        <div><span className="text-foreground/60">Path:</span> {f.filePath}</div>
-                        {meta.vulnerabilityId && <div><span className="text-foreground/60">Vulnerability ID:</span> {meta.vulnerabilityId}</div>}
-                        {meta.fixedVersion && <div><span className="text-foreground/60">Fixed In:</span> {meta.fixedVersion}</div>}
-                        {f.remediation && <div className="text-primary mt-1">{f.remediation}</div>}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-muted-foreground mt-2 font-mono bg-surface p-2 rounded">
-                        {f.filePath}:{f.line || '?'}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        {activeTab === 'history' && (
+          <div className="bg-surface border border-border p-8 rounded-xl flex items-center justify-center text-muted-foreground text-sm shadow-sm flex-shrink-0">
+            Scan history will appear here
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
