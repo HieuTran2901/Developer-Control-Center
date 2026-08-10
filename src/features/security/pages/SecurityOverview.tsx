@@ -12,6 +12,10 @@ import { SecurityTabs } from '../components/SecurityTabs';
 import { SecurityActiveFindings } from '../components/SecurityActiveFindings';
 import { SecurityCapabilities } from '../components/SecurityCapabilities';
 
+import { SecurityHistoryList } from '../components/SecurityHistoryList';
+import { securityHistoryRepository } from '@/application/services';
+import { SecurityHistoryRecord } from '@/domain/entities/SecurityHistoryRecord';
+
 export function SecurityOverview() {
   const { workspace, session, updateSession } = useWorkspace();
 
@@ -68,6 +72,24 @@ export function SecurityOverview() {
   const [, setSummary] = useState<SecurityScanSummary | null>(initialCache.summary);
   const [activeTab, setActiveTab] = useState<'overview' | 'history'>('overview');
   const [scanMode, setScanMode] = useState<SecurityScanMode>(initialCache.scanMode);
+  const [historyRecords, setHistoryRecords] = useState<SecurityHistoryRecord[]>([]);
+
+  // Load history records from persistent storage
+  useEffect(() => {
+    securityHistoryRepository.getHistory().then(records => {
+      setHistoryRecords(records);
+    });
+
+    const unsubHistory = EventBus.subscribe<SecurityHistoryRecord>(EventType.SecurityHistoryUpdated, () => {
+      securityHistoryRepository.getHistory().then(records => {
+        setHistoryRecords(records);
+      });
+    });
+
+    return () => {
+      unsubHistory();
+    };
+  }, []);
 
   const handleScanModeChange = (mode: SecurityScanMode) => {
     setScanMode(mode);
@@ -201,9 +223,7 @@ export function SecurityOverview() {
         )}
 
         {activeTab === 'history' && (
-          <div className="bg-surface border border-border p-8 rounded-xl flex items-center justify-center text-muted-foreground text-sm shadow-sm flex-shrink-0">
-            Scan history will appear here
-          </div>
+          <SecurityHistoryList historyRecords={historyRecords} />
         )}
       </div>
     </div>

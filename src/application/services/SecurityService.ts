@@ -9,6 +9,9 @@ import {
   SecurityScanEventPayload 
 } from '../../domain/entities/SecurityFinding';
 
+import { SecurityHistoryRecord } from '../../domain/entities/SecurityHistoryRecord';
+import { securityHistoryRepository } from './index';
+
 export interface SecurityTargetState {
   name: string;
   path: string;
@@ -20,6 +23,7 @@ export interface SecurityStateCache {
   status: SecurityScanStatus;
   scanId: string | null;
   scanMode: SecurityScanMode;
+  startedAt?: number;
   progress: { scannedFiles: number; currentScanner: string };
   findings: SecurityFinding[];
   summary: SecurityScanSummary | null;
@@ -34,6 +38,7 @@ export class SecurityService {
     status: 'IDLE',
     scanId: null,
     scanMode: 'FULL',
+    startedAt: undefined,
     progress: { scannedFiles: 0, currentScanner: '' },
     findings: [],
     summary: null,
@@ -68,8 +73,10 @@ export class SecurityService {
       
       // We route the raw payload into our EventBus system
       if (payload.type === 'Started') {
+        const now = Date.now();
         this.stateCache.status = 'SCANNING';
         this.stateCache.scanId = payload.payload.scanId;
+        this.stateCache.startedAt = now;
         this.stateCache.findings = [];
         this.stateCache.summary = null;
         this.stateCache.progress = { scannedFiles: 0, currentScanner: 'Initializing...' };
@@ -84,14 +91,80 @@ export class SecurityService {
         this.stateCache.findings = [...this.stateCache.findings, ...payload.payload.findings];
         EventBus.publish(EventType.SecurityFindingsChunkDetected, payload.payload);
       } else if (payload.type === 'Completed') {
+        const now = Date.now();
         this.stateCache.status = 'COMPLETED';
         this.stateCache.summary = payload.payload.summary;
+
+        const scanId = payload.payload.scanId;
+        const record: SecurityHistoryRecord = {
+          id: scanId,
+          scanId,
+          projectId: this.stateCache.activeTarget?.id,
+          targetName: this.stateCache.activeTarget?.name || 'Unknown Project',
+          targetPath: this.stateCache.activeTarget?.path || '',
+          scanMode: this.stateCache.scanMode,
+          status: 'COMPLETED',
+          startedAt: this.stateCache.startedAt || (now - payload.payload.summary.scanDurationMs),
+          completedAt: now,
+          durationMs: payload.payload.summary.scanDurationMs,
+          scannedFiles: this.stateCache.progress.scannedFiles,
+          summary: payload.payload.summary,
+        };
+        securityHistoryRepository.addRecord(record).then(() => {
+          EventBus.publish(EventType.SecurityHistoryUpdated, record);
+        });
+
         EventBus.publish(EventType.SecurityScanCompleted, payload.payload);
       } else if (payload.type === 'Failed') {
+        const now = Date.now();
         this.stateCache.status = 'FAILED';
+        
+        const scanId = payload.payload.scanId;
+        const duration = this.stateCache.startedAt ? now - this.stateCache.startedAt : 0;
+        const record: SecurityHistoryRecord = {
+          id: scanId,
+          scanId,
+          projectId: this.stateCache.activeTarget?.id,
+          targetName: this.stateCache.activeTarget?.name || 'Unknown Project',
+          targetPath: this.stateCache.activeTarget?.path || '',
+          scanMode: this.stateCache.scanMode,
+          status: 'FAILED',
+          startedAt: this.stateCache.startedAt || now,
+          completedAt: now,
+          durationMs: duration,
+          scannedFiles: this.stateCache.progress.scannedFiles,
+          summary: { totalFindings: 0, critical: 0, high: 0, medium: 0, low: 0, info: 0, scanDurationMs: duration },
+          reason: payload.payload.reason,
+        };
+        securityHistoryRepository.addRecord(record).then(() => {
+          EventBus.publish(EventType.SecurityHistoryUpdated, record);
+        });
+
         EventBus.publish(EventType.SecurityScanFailed, payload.payload);
       } else if (payload.type === 'Cancelled') {
+        const now = Date.now();
         this.stateCache.status = 'CANCELLED';
+
+        const scanId = payload.payload.scanId;
+        const duration = this.stateCache.startedAt ? now - this.stateCache.startedAt : 0;
+        const record: SecurityHistoryRecord = {
+          id: scanId,
+          scanId,
+          projectId: this.stateCache.activeTarget?.id,
+          targetName: this.stateCache.activeTarget?.name || 'Unknown Project',
+          targetPath: this.stateCache.activeTarget?.path || '',
+          scanMode: this.stateCache.scanMode,
+          status: 'CANCELLED',
+          startedAt: this.stateCache.startedAt || now,
+          completedAt: now,
+          durationMs: duration,
+          scannedFiles: this.stateCache.progress.scannedFiles,
+          summary: { totalFindings: this.stateCache.findings.length, critical: 0, high: 0, medium: 0, low: 0, info: 0, scanDurationMs: duration },
+        };
+        securityHistoryRepository.addRecord(record).then(() => {
+          EventBus.publish(EventType.SecurityHistoryUpdated, record);
+        });
+
         EventBus.publish(EventType.SecurityScanCancelled, payload.payload);
       } else {
         console.warn('[SecurityService] Unknown security_event type:', (payload as any).type);

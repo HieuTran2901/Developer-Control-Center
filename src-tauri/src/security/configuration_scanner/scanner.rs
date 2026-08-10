@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::security::domain::{SecurityFinding, SecurityCategory};
+use crate::security::domain::{SecurityCategory, SecurityFinding};
 use crate::security::scanner::SecurityScanner;
 
 pub struct ConfigurationScanner {}
@@ -19,14 +19,19 @@ impl SecurityScanner for ConfigurationScanner {
     }
 
     fn supported_categories(&self) -> Vec<SecurityCategory> {
-        vec![SecurityCategory::Configuration, SecurityCategory::Environment]
+        vec![
+            SecurityCategory::Configuration,
+            SecurityCategory::Environment,
+        ]
     }
 
     fn scan(
         &self,
         path: &Path,
         cancel_token: Arc<AtomicBool>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<SecurityFinding>, String>> + Send>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<SecurityFinding>, String>> + Send>,
+    > {
         let path_buf = path.to_path_buf();
         let rules = super::rules::get_default_rules();
 
@@ -35,7 +40,11 @@ impl SecurityScanner for ConfigurationScanner {
                 return Ok(vec![]);
             }
 
-            let ext = path_buf.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+            let ext = path_buf
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
             if ext != "json" && ext != "yml" && ext != "yaml" {
                 return Ok(vec![]);
             }

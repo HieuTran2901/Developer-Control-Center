@@ -27,7 +27,8 @@ export enum EventType {
   SecurityFindingsChunkDetected = 'SecurityFindingsChunkDetected',
   SecurityScanCompleted = 'SecurityScanCompleted',
   SecurityScanFailed = 'SecurityScanFailed',
-  SecurityScanCancelled = 'SecurityScanCancelled'
+  SecurityScanCancelled = 'SecurityScanCancelled',
+  SecurityHistoryUpdated = 'SecurityHistoryUpdated'
 }
 
 export type EventHandler<T = any> = (payload: T) => void;

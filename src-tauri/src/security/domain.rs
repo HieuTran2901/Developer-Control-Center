@@ -1,6 +1,20 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SecurityScanMode {
+    Quick,
+    GitExposure,
+    Full,
+}
+
+impl Default for SecurityScanMode {
+    fn default() -> Self {
+        Self::Full
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SecuritySeverity {
     Info,
@@ -48,6 +62,9 @@ pub struct DependencyMetadata {
     pub package_name: String,
     pub version: String,
     pub vulnerability_id: Option<String>,
+    pub aliases: Option<Vec<String>>,
+    pub details: Option<String>,
+    pub references: Option<Vec<String>>,
     pub fixed_version: Option<String>,
 }
 
@@ -84,10 +101,37 @@ pub struct SecurityScanSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum SecurityScanEvent {
-    Started { project_id: String, scan_id: String },
-    Progress { scan_id: String, scanned_files: usize, current_scanner: String },
-    FindingsChunk { scan_id: String, findings: Vec<SecurityFinding> },
-    Completed { scan_id: String, summary: SecurityScanSummary },
-    Failed { scan_id: String, reason: String },
-    Cancelled { scan_id: String },
+    Started {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        #[serde(rename = "scanId")]
+        scan_id: String,
+    },
+    Progress {
+        #[serde(rename = "scanId")]
+        scan_id: String,
+        #[serde(rename = "scannedFiles")]
+        scanned_files: usize,
+        #[serde(rename = "currentScanner")]
+        current_scanner: String,
+    },
+    FindingsChunk {
+        #[serde(rename = "scanId")]
+        scan_id: String,
+        findings: Vec<SecurityFinding>,
+    },
+    Completed {
+        #[serde(rename = "scanId")]
+        scan_id: String,
+        summary: SecurityScanSummary,
+    },
+    Failed {
+        #[serde(rename = "scanId")]
+        scan_id: String,
+        reason: String,
+    },
+    Cancelled {
+        #[serde(rename = "scanId")]
+        scan_id: String,
+    },
 }

@@ -1,4 +1,4 @@
-﻿import { isTauri } from '@tauri-apps/api/core';
+import { isTauri } from '@tauri-apps/api/core';
 import { TauriDesktopGateway } from '../managers/TauriDesktopGateway';
 import { DesktopHealthService } from './DesktopHealthService';
 import { RuntimeRegistry } from '../managers/RuntimeRegistry';
@@ -52,4 +52,8 @@ export const alertService = new AlertService();
 export * from './PerformanceAnalysisService';
 import { PerformanceAnalysisService } from './PerformanceAnalysisService';
 export const performanceAnalysisService = new PerformanceAnalysisService();
+
+import { SecurityHistoryRepository } from '../repositories/SecurityHistoryRepository';
+export const securityHistoryRepository = new SecurityHistoryRepository(tauriDesktopGateway);
+
 

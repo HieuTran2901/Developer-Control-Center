@@ -11,11 +11,15 @@ export type SecurityCategory =
 
 export type SecurityScanStatus = 'IDLE' | 'SCANNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 
+export type SecurityScanMode = 'QUICK' | 'GIT_EXPOSURE' | 'FULL';
 export interface DependencyMetadata {
   ecosystem: string;
   packageName: string;
   version: string;
   vulnerabilityId?: string;
+  aliases?: string[];
+  details?: string;
+  references?: string[];
   fixedVersion?: string;
 }
 

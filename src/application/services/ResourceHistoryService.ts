@@ -1,4 +1,4 @@
-﻿import { EventBus, EventType } from '@/application/events/EventBus';
+import { EventBus, EventType } from '@/application/events/EventBus';
 import { ProcessMetrics } from '@/domain/entities/ProcessMetrics';
 import { ProcessHistory } from '@/domain/entities/ProcessHistory';
 
@@ -67,10 +67,16 @@ export class ResourceHistoryService {
 
     // Cleanup when process stops
     EventBus.subscribe<any>(EventType.ProcessStopped, (payload) => {
-      if (payload.pid) this.histories.delete(payload.pid);
+      if (payload.pid) {
+        this.histories.delete(payload.pid);
+        EventBus.publish(EventType.HistoryMetricsUpdated, Array.from(this.histories.values()));
+      }
     });
     EventBus.subscribe<any>(EventType.ProcessExited, (payload) => {
-      if (payload.pid) this.histories.delete(payload.pid);
+      if (payload.pid) {
+        this.histories.delete(payload.pid);
+        EventBus.publish(EventType.HistoryMetricsUpdated, Array.from(this.histories.values()));
+      }
     });
   }
 }

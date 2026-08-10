@@ -2,7 +2,7 @@ import { Icon } from '@/shared/components/ui/Icon';
 
 export function Header() {
   return (
-    <header className="h-16 border-b border-border/40 bg-[#0d1117]/80 backdrop-blur-md flex items-center justify-between px-8 flex-shrink-0 z-10 sticky top-0 transition-all select-none">
+    <header className="h-20 min-h-[80px] border-b border-border/40 bg-[#0d1117]/80 backdrop-blur-md flex items-center justify-between px-8 shrink-0 z-10 sticky top-0 transition-all select-none">
       <div className="flex-1">
         {/* Placeholder for left-side tools if needed */}
       </div>
@@ -30,7 +30,7 @@ export function Header() {
           <Icon name="Bell" size={18} />
           <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-red-500 border border-[#0d1117]"></span>
         </button>
-        <div className="w-8 h-8 rounded-full bg-[#2563eb] cursor-pointer overflow-hidden shadow-sm flex items-center justify-center text-sm font-semibold text-white ml-2 hover:bg-[#3b82f6] transition-colors" title="User Profile">
+        <div className="w-8 h-8 min-w-[32px] min-h-[32px] shrink-0 rounded-full bg-[#2563eb] cursor-pointer overflow-hidden shadow-sm flex items-center justify-center text-sm font-semibold text-white ml-2 hover:bg-[#3b82f6] transition-colors" title="User Profile">
           D
         </div>
       </div>

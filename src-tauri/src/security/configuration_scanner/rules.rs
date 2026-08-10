@@ -1,4 +1,4 @@
-use crate::security::domain::{SecurityFinding, SecuritySeverity, SecurityCategory};
+use crate::security::domain::{SecurityCategory, SecurityFinding, SecuritySeverity};
 use serde_yaml::Value;
 
 pub trait ConfigRule: Send + Sync {
@@ -35,8 +35,13 @@ pub struct PermissiveCorsRule;
 
 impl ConfigRule for PermissiveCorsRule {
     fn check(&self, file_path: &str, config: &Value) -> Option<SecurityFinding> {
-        if search_for_kv(config, "cors", &Value::String("*".to_string())) || 
-           search_for_kv(config, "Access-Control-Allow-Origin", &Value::String("*".to_string())) {
+        if search_for_kv(config, "cors", &Value::String("*".to_string()))
+            || search_for_kv(
+                config,
+                "Access-Control-Allow-Origin",
+                &Value::String("*".to_string()),
+            )
+        {
             Some(SecurityFinding {
                 id: format!("{}:permissive_cors", file_path),
                 severity: SecuritySeverity::Medium,
@@ -87,10 +92,7 @@ fn search_for_kv(value: &Value, target_key: &str, target_val: &Value) -> bool {
 }
 
 pub fn get_default_rules() -> Vec<Box<dyn ConfigRule>> {
-    vec![
-        Box::new(DebugModeRule),
-        Box::new(PermissiveCorsRule),
-    ]
+    vec![Box::new(DebugModeRule), Box::new(PermissiveCorsRule)]
 }
 
 #[cfg(test)]

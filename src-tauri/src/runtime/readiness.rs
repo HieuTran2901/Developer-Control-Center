@@ -19,10 +19,14 @@ impl ReadinessResolver {
         let lower_cmd = command.to_lowercase();
         if lower_cmd.contains("spring-boot:run") || lower_cmd.contains("mvnw") {
             // Default Spring Boot log pattern
-            ReadinessStrategy::LogPattern { pattern: "Started .* in .* seconds".to_string() }
+            ReadinessStrategy::LogPattern {
+                pattern: "Started .* in .* seconds".to_string(),
+            }
         } else if lower_cmd.contains("npm") || lower_cmd.contains("vite") {
             // Default Vite log pattern
-            ReadinessStrategy::LogPattern { pattern: "Local:".to_string() }
+            ReadinessStrategy::LogPattern {
+                pattern: "Local:".to_string(),
+            }
         } else {
             // Fallback for unknown commands
             ReadinessStrategy::None

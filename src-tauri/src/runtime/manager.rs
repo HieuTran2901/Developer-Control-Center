@@ -193,26 +193,34 @@ impl ProcessManager {
                     );
                 });
 
-                let resolved_readiness = crate::runtime::readiness::ReadinessResolver::resolve(&command, readiness_regex.clone(), readiness_config);
-                
+                let resolved_readiness = crate::runtime::readiness::ReadinessResolver::resolve(
+                    &command,
+                    readiness_regex.clone(),
+                    readiness_config,
+                );
+
                 let regex_pattern = match &resolved_readiness {
-                    crate::runtime::model::ReadinessStrategy::LogPattern { pattern } => Some(pattern.clone()),
+                    crate::runtime::model::ReadinessStrategy::LogPattern { pattern } => {
+                        Some(pattern.clone())
+                    }
                     _ => None,
                 };
                 let regex_pattern_err = regex_pattern.clone();
-                
+
                 let app_handle_timeout = self.app_handle.clone();
                 let p_id_timeout = project_id.clone();
                 let s_id_timeout = profile_id.clone();
                 let id_timeout = id.clone();
                 let registry_timeout = self.registry.clone();
-                
+
                 tokio::spawn(async move {
                     match resolved_readiness {
                         crate::runtime::model::ReadinessStrategy::None => {
                             // If strategy is None, just set it to ready immediately
                             if let Some(mut m) = registry_timeout.find_by_id(&id_timeout) {
-                                if m.status == ProcessState::Running && m.readiness == ReadinessState::Waiting {
+                                if m.status == ProcessState::Running
+                                    && m.readiness == ReadinessState::Waiting
+                                {
                                     m.readiness = ReadinessState::Ready;
                                     registry_timeout.add(m);
                                     let _ = app_handle_timeout.emit(
@@ -232,11 +240,17 @@ impl ProcessManager {
                         crate::runtime::model::ReadinessStrategy::Port { port } => {
                             // Poll port
                             let mut attempts = 0;
-                            while attempts < 150 { // wait up to 150 * 200ms = 30 seconds
+                            while attempts < 150 {
+                                // wait up to 150 * 200ms = 30 seconds
                                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                                if let Ok(_stream) = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port)).await {
+                                if let Ok(_stream) =
+                                    tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
+                                        .await
+                                {
                                     if let Some(mut m) = registry_timeout.find_by_id(&id_timeout) {
-                                        if m.status == ProcessState::Running && m.readiness == ReadinessState::Waiting {
+                                        if m.status == ProcessState::Running
+                                            && m.readiness == ReadinessState::Waiting
+                                        {
                                             m.readiness = ReadinessState::Ready;
                                             registry_timeout.add(m);
                                             let _ = app_handle_timeout.emit(
@@ -261,7 +275,9 @@ impl ProcessManager {
                             // Http polling is not implemented properly yet, just wait for port 8080 or rely on fallback
                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                             if let Some(mut m) = registry_timeout.find_by_id(&id_timeout) {
-                                if m.status == ProcessState::Running && m.readiness == ReadinessState::Waiting {
+                                if m.status == ProcessState::Running
+                                    && m.readiness == ReadinessState::Waiting
+                                {
                                     m.readiness = ReadinessState::Ready;
                                     registry_timeout.add(m);
                                     let _ = app_handle_timeout.emit(
@@ -297,7 +313,7 @@ impl ProcessManager {
                         let mut readiness_buffer = String::new();
                         let mut last_emit = tokio::time::Instant::now();
                         let mut regex = regex_pattern.and_then(|p| regex::Regex::new(&p).ok());
-                        
+
                         loop {
                             tokio::select! {
                                 res = out.read(&mut read_buf) => {
@@ -322,7 +338,7 @@ impl ProcessManager {
                                         }
                                         Ok(n) => {
                                             let chunk = String::from_utf8_lossy(&read_buf[..n]).into_owned();
-                                            
+
                                             // Readiness check
                                             if let Some(ref re) = regex {
                                                 readiness_buffer.push_str(&chunk);
@@ -355,7 +371,7 @@ impl ProcessManager {
                                                     readiness_buffer = kept;
                                                 }
                                             }
-                                            
+
                                             buffer.push(chunk);
                                             if buffer.len() >= 50 || last_emit.elapsed().as_millis() >= 50 {
                                                 let app_handle = app_handle_out.clone();
@@ -415,7 +431,7 @@ impl ProcessManager {
                         let mut readiness_buffer = String::new();
                         let mut last_emit = tokio::time::Instant::now();
                         let mut regex = regex_pattern_err.and_then(|p| regex::Regex::new(&p).ok());
-                        
+
                         loop {
                             tokio::select! {
                                 res = err.read(&mut read_buf) => {
@@ -440,7 +456,7 @@ impl ProcessManager {
                                         }
                                         Ok(n) => {
                                             let chunk = String::from_utf8_lossy(&read_buf[..n]).into_owned();
-                                            
+
                                             // Readiness check
                                             if let Some(ref re) = regex {
                                                 readiness_buffer.push_str(&chunk);
@@ -473,7 +489,7 @@ impl ProcessManager {
                                                     readiness_buffer = kept;
                                                 }
                                             }
-                                            
+
                                             buffer.push(chunk);
                                             if buffer.len() >= 50 || last_emit.elapsed().as_millis() >= 50 {
                                                 let app_handle = app_handle_err.clone();
@@ -528,7 +544,7 @@ impl ProcessManager {
 
                 tokio::spawn(async move {
                     let _job_manager = job_manager; // Move JobManager into actor task to tie its lifetime to the actor
-                    
+
                     tokio::select! {
                         status_res = child.wait() => {
                             let exit_code = status_res.ok().and_then(|s| s.code()).unwrap_or(-1);
@@ -686,7 +702,7 @@ impl ProcessManager {
         readiness_config: Option<crate::runtime::model::ReadinessStrategy>,
     ) -> Result<(), DesktopError> {
         let id = format!("{}-{}", project_id, profile_id);
-        
+
         if let Some(mut m) = self.registry.find_by_id(&id) {
             m.status = ProcessState::Restarting;
             self.registry.add(m);
@@ -708,7 +724,10 @@ impl ProcessManager {
         while attempts < 20 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             if let Some(m) = self.registry.find_by_id(&id) {
-                if m.status != ProcessState::Stopping && m.status != ProcessState::Running && m.status != ProcessState::Starting {
+                if m.status != ProcessState::Stopping
+                    && m.status != ProcessState::Running
+                    && m.status != ProcessState::Starting
+                {
                     break;
                 }
             } else {
@@ -719,7 +738,15 @@ impl ProcessManager {
 
         // Delay to allow OS ports to be fully released
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        self.start(project_id, profile_id, command, cwd, readiness_regex, readiness_config).await
+        self.start(
+            project_id,
+            profile_id,
+            command,
+            cwd,
+            readiness_regex,
+            readiness_config,
+        )
+        .await
     }
 
     pub async fn shutdown(&self) {
@@ -734,7 +761,7 @@ impl ProcessManager {
                 let _ = self.stop(parts[0].to_string(), parts[1].to_string()).await;
             }
         }
-        
+
         let mut attempts = 0;
         while attempts < 30 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -749,4 +776,3 @@ impl ProcessManager {
         }
     }
 }
-

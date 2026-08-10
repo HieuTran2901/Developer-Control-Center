@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::sync::Mutex;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -29,9 +29,48 @@ pub struct VulnerabilityResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OsvVulnerability {
     pub id: String,
+    pub aliases: Option<Vec<String>>,
+    pub published: Option<String>,
+    pub modified: Option<String>,
+    pub withdrawn: Option<String>,
     pub summary: Option<String>,
     pub details: Option<String>,
-    // we could add more OSV fields as needed, but ID and summary are enough for now
+    pub severity: Option<Vec<OsvSeverity>>,
+    pub affected: Option<Vec<OsvAffected>>,
+    pub references: Option<Vec<OsvReference>>,
+    pub database_specific: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OsvSeverity {
+    pub r#type: String,
+    pub score: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OsvAffected {
+    pub package: Option<OsvPackage>,
+    pub ranges: Option<Vec<OsvRange>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OsvRange {
+    pub r#type: String,
+    pub events: Vec<OsvEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OsvEvent {
+    pub introduced: Option<String>,
+    pub fixed: Option<String>,
+    pub last_affected: Option<String>,
+    pub limit: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OsvReference {
+    pub r#type: String,
+    pub url: String,
 }
 
 // Structs for interacting with OSV API
@@ -46,10 +85,10 @@ struct OsvQuery {
     version: String,
 }
 
-#[derive(Serialize)]
-struct OsvPackage {
-    name: String,
-    ecosystem: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OsvPackage {
+    pub name: String,
+    pub ecosystem: String,
 }
 
 #[derive(Deserialize)]
@@ -86,7 +125,7 @@ impl VulnerabilityProvider for OsvProvider {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<VulnerabilityResult>, String>> + Send>> {
         let client = self.client.clone();
         let cache = Arc::clone(&self.cache);
-        
+
         Box::pin(async move {
             if queries.is_empty() {
                 return Ok(Vec::new());
@@ -116,7 +155,9 @@ impl VulnerabilityProvider for OsvProvider {
             }
 
             // 2. Fetch from OSV (Batch API limits to 1000 per request)
-            let mut osv_payload = OsvBatchQueryPayload { queries: Vec::new() };
+            let mut osv_payload = OsvBatchQueryPayload {
+                queries: Vec::new(),
+            };
             for q in &missing_queries {
                 let ecosystem = match q.ecosystem.to_lowercase().as_str() {
                     "npm" => "npm",
@@ -133,10 +174,11 @@ impl VulnerabilityProvider for OsvProvider {
                 });
             }
 
-            let res = match client.post("https://api.osv.dev/v1/querybatch")
+            let res = match client
+                .post("https://api.osv.dev/v1/querybatch")
                 .json(&osv_payload)
                 .send()
-                .await 
+                .await
             {
                 Ok(r) => r,
                 Err(e) => return Err(format!("Network error: {}", e)),
@@ -159,14 +201,30 @@ impl VulnerabilityProvider for OsvProvider {
             let mut cache_lock = cache.lock().await;
             for (i, result) in batch_response.results.into_iter().enumerate() {
                 let q = &missing_queries[i];
-                let vulns = result.vulns.unwrap_or_default();
-                
+                let mut full_vulns = Vec::new();
+
+                if let Some(vulns) = result.vulns {
+                    for v in vulns {
+                        // Fetch full vulnerability details since querybatch only returns id/modified
+                        let vuln_url = format!("https://api.osv.dev/v1/vulns/{}", v.id);
+                        if let Ok(res) = client.get(&vuln_url).send().await {
+                            if let Ok(full_vuln) = res.json::<OsvVulnerability>().await {
+                                full_vulns.push(full_vuln);
+                            } else {
+                                full_vulns.push(v);
+                            }
+                        } else {
+                            full_vulns.push(v);
+                        }
+                    }
+                }
+
                 let cache_key = format!("{}:{}:{}", q.ecosystem, q.name, q.version);
-                cache_lock.insert(cache_key, vulns.clone());
+                cache_lock.insert(cache_key, full_vulns.clone());
 
                 final_results.push(VulnerabilityResult {
                     query: q.clone(),
-                    vulns,
+                    vulns: full_vulns,
                 });
             }
 

@@ -56,10 +56,10 @@ pub fn parse_package_lock_json(content: &str) -> Result<ManifestParseResult, Str
             if k.is_empty() {
                 continue; // Root package
             }
-            
+
             // For v3, name is usually derived from the key (e.g. "node_modules/foo")
             let name = k.split("node_modules/").last().unwrap_or(k).to_string();
-            
+
             if let Some(version) = v.get("version").and_then(|v| v.as_str()) {
                 let is_dev = v.get("dev").and_then(|d| d.as_bool()).unwrap_or(false);
                 dependencies.push(RawDependency {
@@ -133,7 +133,7 @@ pub fn parse_pom_xml(content: &str) -> Result<ManifestParseResult, String> {
                 let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                 if name == "dependency" {
                     in_dependency = false;
-                    
+
                     // Maven version could be missing (inherited or dependencyManagement)
                     if !current_group.is_empty() && !current_artifact.is_empty() {
                         dependencies.push(RawDependency {
@@ -146,7 +146,13 @@ pub fn parse_pom_xml(content: &str) -> Result<ManifestParseResult, String> {
                 current_tag.clear();
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(format!("XML Error at position {}: {:?}", reader.buffer_position(), e)),
+            Err(e) => {
+                return Err(format!(
+                    "XML Error at position {}: {:?}",
+                    reader.buffer_position(),
+                    e
+                ))
+            }
             _ => (),
         }
         buf.clear();

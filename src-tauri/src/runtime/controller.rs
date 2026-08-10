@@ -20,7 +20,16 @@ impl ProcessController {
         readiness_regex: Option<String>,
         readiness_config: Option<crate::runtime::model::ReadinessStrategy>,
     ) -> Result<(), DesktopError> {
-        self.manager.start(project_id, profile_id, command, cwd, readiness_regex, readiness_config).await
+        self.manager
+            .start(
+                project_id,
+                profile_id,
+                command,
+                cwd,
+                readiness_regex,
+                readiness_config,
+            )
+            .await
     }
 
     pub async fn stop(&self, project_id: String, profile_id: String) -> Result<(), DesktopError> {
@@ -44,6 +53,15 @@ impl ProcessController {
         readiness_regex: Option<String>,
         readiness_config: Option<crate::runtime::model::ReadinessStrategy>,
     ) -> Result<(), DesktopError> {
-        self.manager.restart(project_id, profile_id, command, cwd, readiness_regex, readiness_config).await
+        self.manager
+            .restart(
+                project_id,
+                profile_id,
+                command,
+                cwd,
+                readiness_regex,
+                readiness_config,
+            )
+            .await
     }
 }

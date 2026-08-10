@@ -1,4 +1,4 @@
-﻿import { EventBus, EventType } from '@/application/events/EventBus';
+import { EventBus, EventType } from '@/application/events/EventBus';
 import { ProcessHistory } from '@/domain/entities/ProcessHistory';
 import { PerformanceSummary, PerformanceTrendDirection, PerformanceWarning } from '@/domain/entities/PerformanceSummary';
 
@@ -25,10 +25,16 @@ export class PerformanceAnalysisService {
     });
 
     EventBus.subscribe<any>(EventType.ProcessStopped, (payload) => {
-      if (payload.pid) this.summaries.delete(payload.pid);
+      if (payload.pid) {
+        this.summaries.delete(payload.pid);
+        EventBus.publish(EventType.PerformanceSummaryUpdated, Array.from(this.summaries.values()));
+      }
     });
     EventBus.subscribe<any>(EventType.ProcessExited, (payload) => {
-      if (payload.pid) this.summaries.delete(payload.pid);
+      if (payload.pid) {
+        this.summaries.delete(payload.pid);
+        EventBus.publish(EventType.PerformanceSummaryUpdated, Array.from(this.summaries.values()));
+      }
     });
   }
 

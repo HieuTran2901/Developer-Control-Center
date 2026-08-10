@@ -13,7 +13,16 @@ pub async fn start_process_cmd(
     readiness_config: Option<crate::runtime::model::ReadinessStrategy>,
     runtime: State<'_, Arc<ProcessController>>,
 ) -> Result<(), DesktopError> {
-    runtime.start(project_id, profile_id, command, cwd, readiness_regex, readiness_config).await
+    runtime
+        .start(
+            project_id,
+            profile_id,
+            command,
+            cwd,
+            readiness_regex,
+            readiness_config,
+        )
+        .await
 }
 
 #[tauri::command]
@@ -44,5 +53,14 @@ pub async fn restart_process_cmd(
     readiness_config: Option<crate::runtime::model::ReadinessStrategy>,
     runtime: State<'_, Arc<ProcessController>>,
 ) -> Result<(), DesktopError> {
-    runtime.restart(project_id, profile_id, command, cwd, readiness_regex, readiness_config).await
+    runtime
+        .restart(
+            project_id,
+            profile_id,
+            command,
+            cwd,
+            readiness_regex,
+            readiness_config,
+        )
+        .await
 }

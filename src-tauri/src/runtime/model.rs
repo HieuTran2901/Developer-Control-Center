@@ -27,9 +27,15 @@ pub enum ReadinessState {
 pub enum ReadinessStrategy {
     None,
     #[serde(rename = "log_pattern")]
-    LogPattern { pattern: String },
-    Port { port: u16 },
-    Http { path: Option<String> }, // path or url
+    LogPattern {
+        pattern: String,
+    },
+    Port {
+        port: u16,
+    },
+    Http {
+        path: Option<String>,
+    }, // path or url
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

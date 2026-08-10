@@ -1,21 +1,21 @@
 pub mod commands;
 pub mod error;
+mod monitor;
 pub mod runtime;
 pub mod security;
-mod monitor;
 
 use commands::fs_cmds::{get_app_data_dir_cmd, read_text_file_cmd, write_text_file_cmd};
 use commands::runtime_cmds::{
     force_stop_process_cmd, restart_process_cmd, start_process_cmd, stop_process_cmd,
 };
+use commands::security_cmds::{cancel_security_scan_cmd, start_security_scan_cmd};
 use commands::system::{
     get_app_version_command, get_system_info_command, open_browser_command, open_folder_command,
     ping_command, read_directory_command,
 };
-use commands::security_cmds::{start_security_scan_cmd, cancel_security_scan_cmd};
-use runtime::registry::RuntimeRegistry;
-use runtime::manager::ProcessManager;
 use runtime::controller::ProcessController;
+use runtime::manager::ProcessManager;
+use runtime::registry::RuntimeRegistry;
 use security::engine::SecurityEngine;
 use std::sync::Arc;
 use tauri::Manager;
@@ -35,10 +35,10 @@ pub fn run() {
             let manager = Arc::new(ProcessManager::new(registry, app.handle().clone()));
             let controller = Arc::new(ProcessController::new(manager));
             app.manage(controller);
-            
+
             let security_engine = Arc::new(SecurityEngine::new());
             app.manage(security_engine);
-            
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -75,5 +75,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-
-

@@ -11,12 +11,14 @@ pub trait SecurityScanner: Send + Sync {
     /// Returns the categories this scanner can detect.
     fn supported_categories(&self) -> Vec<SecurityCategory>;
 
-    /// Scans a file or directory. 
+    /// Scans a file or directory.
     /// The `path` provided is guaranteed to be within the project root.
     /// The scanner should check `cancel_token` periodically if doing heavy work.
     fn scan(
         &self,
         path: &Path,
         cancel_token: Arc<AtomicBool>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<SecurityFinding>, String>> + Send>>;
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<SecurityFinding>, String>> + Send>,
+    >;
 }
