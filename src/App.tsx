@@ -9,6 +9,7 @@ import { PlaceholderPage } from './shared/components/ui/PlaceholderPage';
 import { WorkspaceProvider } from './shared/hooks/useWorkspace';
 import { ToastProvider } from './shared/hooks/useToast';
 import { SecurityOverview } from './features/security/pages/SecurityOverview';
+import { CICDOverview } from './features/cicd/pages/CICDOverview';
 
 export default function App() {
   console.log('[DEBUG 1 App.tsx] App rendering, mounting WorkspaceProvider');
@@ -30,6 +31,7 @@ export default function App() {
               <Route path="terminal" element={<PlaceholderPage title="Terminal" icon="Terminal" />} />
               <Route path="logs" element={<PlaceholderPage title="Logs" icon="List" />} />
               <Route path="security" element={<SecurityOverview />} />
+              <Route path="cicd" element={<CICDOverview />} />
               <Route path="settings" element={<Settings />} />
               <Route path="about" element={<PlaceholderPage title="About" icon="Info" />} />
             </Route>

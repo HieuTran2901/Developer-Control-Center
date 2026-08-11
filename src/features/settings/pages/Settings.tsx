@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs';
 import { Button } from '@/shared/components/ui/button';
 import { Icon } from '@/shared/components/ui/Icon';
+import { AIProviders } from '../components/AIProviders';
 import { desktopHealthService } from '@/application/services';
 import { HealthStatus } from '@/application/services/DesktopHealthService';
 
@@ -27,10 +28,11 @@ export function Settings() {
 
   return (
     <PageContainer title="Settings" description="Manage your application preferences and configurations.">
-      <Tabs defaultValue="appearance" className="w-full max-w-4xl mt-6 animate-in fade-in duration-500">
-        <TabsList className="mb-8">
+      <Tabs defaultValue="appearance" className="w-full max-w-4xl animate-in fade-in duration-500">
+        <TabsList className="mb-6">
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           <TabsTrigger value="developer">Developer Options</TabsTrigger>
+          <TabsTrigger value="ai-providers">AI Providers</TabsTrigger>
           <TabsTrigger value="health">System Health</TabsTrigger>
           <TabsTrigger value="about">About</TabsTrigger>
         </TabsList>
@@ -70,6 +72,10 @@ export function Settings() {
               <p className="text-sm text-muted-foreground">Settings for default workspace path, terminal shell, and environment variables will go here.</p>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="ai-providers">
+          <AIProviders />
         </TabsContent>
 
         <TabsContent value="health">
