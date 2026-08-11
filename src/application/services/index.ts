@@ -56,4 +56,4 @@ export const performanceAnalysisService = new PerformanceAnalysisService();
 import { SecurityHistoryRepository } from '../repositories/SecurityHistoryRepository';
 export const securityHistoryRepository = new SecurityHistoryRepository(tauriDesktopGateway);
 
-
+export * from './AIProviderService';

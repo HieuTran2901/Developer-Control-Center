@@ -1,9 +1,17 @@
+pub mod ai;
 pub mod commands;
 pub mod error;
 mod monitor;
+pub mod pipeline;
 pub mod runtime;
 pub mod security;
 
+use ai::{AIGateway, AIProviderService};
+use commands::ai_gateway_cmds::ai_gateway_send_request_cmd;
+use commands::ai_provider_cmds::{
+    ai_provider_create_cmd, ai_provider_delete_cmd, ai_provider_list_cmd,
+    ai_provider_set_default_cmd, ai_provider_test_connection_cmd, ai_provider_update_cmd,
+};
 use commands::fs_cmds::{get_app_data_dir_cmd, read_text_file_cmd, write_text_file_cmd};
 use commands::runtime_cmds::{
     force_stop_process_cmd, restart_process_cmd, start_process_cmd, stop_process_cmd,
@@ -13,6 +21,8 @@ use commands::system::{
     get_app_version_command, get_system_info_command, open_browser_command, open_folder_command,
     ping_command, read_directory_command,
 };
+use commands::pipeline_cmds::{get_pipeline_execution_state, list_active_executions};
+use pipeline::events::PipelineExecutionManager;
 use runtime::controller::ProcessController;
 use runtime::manager::ProcessManager;
 use runtime::registry::RuntimeRegistry;
@@ -38,6 +48,19 @@ pub fn run() {
 
             let security_engine = Arc::new(SecurityEngine::new());
             app.manage(security_engine);
+
+            let pipeline_manager = Arc::new(PipelineExecutionManager::new());
+            app.manage(pipeline_manager);
+
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let ai_service = Arc::new(AIProviderService::new(app_data_dir.clone()));
+            app.manage(ai_service);
+
+            let ai_gateway = Arc::new(AIGateway::new(app_data_dir));
+            app.manage(ai_gateway);
 
             Ok(())
         })
@@ -71,6 +94,15 @@ pub fn run() {
             write_text_file_cmd,
             start_security_scan_cmd,
             cancel_security_scan_cmd,
+            ai_provider_list_cmd,
+            ai_provider_create_cmd,
+            ai_provider_update_cmd,
+            ai_provider_delete_cmd,
+            ai_provider_set_default_cmd,
+            ai_provider_test_connection_cmd,
+            ai_gateway_send_request_cmd,
+            get_pipeline_execution_state,
+            list_active_executions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
