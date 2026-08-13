@@ -1,11 +1,13 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Icon } from '@/shared/components/ui/Icon';
 import { Button } from '@/shared/components/ui/button';
-import { mockPipelineRuns, Status } from '../data/mockCICDData';
+import { usePipelineContext } from '../context/PipelineContext';
 import { cn } from '@/shared/utils';
 
 export function RecentPipelineRuns() {
-  const getStatusStyle = (status: Status) => {
+  const { recentExecutions, triggerPipeline } = usePipelineContext();
+
+  const getStatusStyle = (status: string) => {
     switch (status) {
       case 'Success':
         return { icon: 'CheckCircle2', color: 'text-green-500' };
@@ -50,7 +52,7 @@ export function RecentPipelineRuns() {
 
         {/* Table Body */}
         <div className="flex-1 overflow-y-auto">
-          {mockPipelineRuns.map((run) => {
+          {recentExecutions.map((run) => {
             const statusStyle = getStatusStyle(run.status);
             const projectStyle = getProjectIcon(run.project);
             
@@ -108,7 +110,7 @@ export function RecentPipelineRuns() {
 
                 {/* ACTIONS */}
                 <div className="flex items-center justify-end gap-1">
-                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20" title="Run Again">
+                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20" title="Run Again" onClick={() => triggerPipeline('web-app-pipeline')}>
                     <Icon name="Play" size={12} className="w-3 h-3 shrink-0 fill-current" />
                   </Button>
                   <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground">

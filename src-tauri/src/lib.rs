@@ -3,8 +3,11 @@ pub mod commands;
 pub mod error;
 mod monitor;
 pub mod pipeline;
+pub mod policy;
 pub mod runtime;
 pub mod security;
+pub mod config;
+pub mod deployment;
 
 use ai::{AIGateway, AIProviderService};
 use commands::ai_gateway_cmds::ai_gateway_send_request_cmd;
@@ -21,8 +24,26 @@ use commands::system::{
     get_app_version_command, get_system_info_command, open_browser_command, open_folder_command,
     ping_command, read_directory_command,
 };
-use commands::pipeline_cmds::{get_pipeline_execution_state, list_active_executions};
+use commands::pipeline_cmds::{
+    get_pipeline_execution_state, list_active_executions, submit_step_approval,
+    get_pipelines, get_recent_executions, get_pipeline_health_stats, trigger_pipeline,
+    scan_project_cmd, generate_pipeline_cmd, export_pipeline_cmd, list_pending_approvals, get_approval,
+    approve_approval, reject_approval, request_new_approval,
+};
+use commands::config_cmds::{
+    get_project_config, create_environment, update_environment, delete_environment,
+    set_environment_secret,
+};
+use commands::deployment_cmds::{
+    create_deployment, approve_deployment, execute_deployment, get_deployment_history, cancel_deployment_cmd
+};
+use commands::pipeline_history_cmds::{
+    list_pipeline_history_cmd, get_pipeline_history_cmd, get_pipeline_version_cmd,
+    get_pipeline_events_cmd, compare_pipeline_versions_cmd,
+};
 use pipeline::events::PipelineExecutionManager;
+use pipeline::history::PipelineHistoryStore;
+use policy::PolicyEngine;
 use runtime::controller::ProcessController;
 use runtime::manager::ProcessManager;
 use runtime::registry::RuntimeRegistry;
@@ -49,18 +70,49 @@ pub fn run() {
             let security_engine = Arc::new(SecurityEngine::new());
             app.manage(security_engine);
 
+            let policy_engine = Arc::new(PolicyEngine::new());
+            app.manage(policy_engine.clone());
+
             let pipeline_manager = Arc::new(PipelineExecutionManager::new());
-            app.manage(pipeline_manager);
+            app.manage(pipeline_manager.clone());
 
             let app_data_dir = app
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+            let history_store = Arc::new(PipelineHistoryStore::new(&app_data_dir).unwrap());
+            app.manage(history_store.clone());
+                
+            let config_store = Arc::new(config::ConfigStore::new(&app_data_dir).unwrap());
+            app.manage(config_store.clone());
             let ai_service = Arc::new(AIProviderService::new(app_data_dir.clone()));
             app.manage(ai_service);
 
-            let ai_gateway = Arc::new(AIGateway::new(app_data_dir));
-            app.manage(ai_gateway);
+            let ai_gateway = Arc::new(AIGateway::new(app_data_dir.clone()));
+            app.manage(ai_gateway.clone());
+
+            let execution_context = Arc::new(pipeline::execution::pipeline_executor::PipelineExecutor::new(
+                Some(ai_gateway.clone()),
+                None,
+                pipeline_manager.clone(),
+            ).with_history_store(history_store.clone()));
+            app.manage(execution_context.clone());
+
+            let deployment_store = Arc::new(deployment::store::DeploymentStore::new(&app_data_dir).unwrap());
+            app.manage(deployment_store.clone());
+
+            let credential_store = Arc::new(ai::credential_store::OsCredentialStore::new());
+
+            let deployment_orchestrator = Arc::new(deployment::orchestrator::DeploymentOrchestrator::new(
+                deployment_store.clone(),
+                config_store.clone(),
+                policy_engine.clone(),
+                pipeline_manager.clone(),
+                execution_context.clone(),
+                credential_store,
+            ));
+            app.manage(deployment_orchestrator);
 
             Ok(())
         })
@@ -103,6 +155,34 @@ pub fn run() {
             ai_gateway_send_request_cmd,
             get_pipeline_execution_state,
             list_active_executions,
+            submit_step_approval,
+            list_pending_approvals,
+            get_approval,
+            approve_approval,
+            reject_approval,
+            request_new_approval,
+            get_pipelines,
+            get_recent_executions,
+            get_pipeline_health_stats,
+            trigger_pipeline,
+            scan_project_cmd,
+            generate_pipeline_cmd,
+            export_pipeline_cmd,
+            get_project_config,
+            create_environment,
+            update_environment,
+            delete_environment,
+            set_environment_secret,
+            create_deployment,
+            approve_deployment,
+            execute_deployment,
+            get_deployment_history,
+            cancel_deployment_cmd,
+            list_pipeline_history_cmd,
+            get_pipeline_history_cmd,
+            get_pipeline_version_cmd,
+            get_pipeline_events_cmd,
+            compare_pipeline_versions_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

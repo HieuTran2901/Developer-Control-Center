@@ -39,3 +39,9 @@ impl PipelineStatus {
         }
     }
 }
+
+impl Default for PipelineStatus {
+    fn default() -> Self {
+        PipelineStatus::Idle
+    }
+}

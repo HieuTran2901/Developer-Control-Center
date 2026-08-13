@@ -105,4 +105,55 @@ pub enum PipelineEvent {
         #[serde(rename = "sequenceNumber")]
         sequence_number: u32,
     },
+    PolicyEvaluated {
+        #[serde(rename = "executionId")]
+        execution_id: String,
+        #[serde(rename = "stepId")]
+        step_id: String,
+        decision: String,
+        #[serde(rename = "riskLevel")]
+        risk_level: String,
+        #[serde(rename = "reasonCode")]
+        reason_code: String,
+        timestamp: u64,
+        #[serde(rename = "sequenceNumber")]
+        sequence_number: u32,
+    },
+    PolicyDenied {
+        #[serde(rename = "executionId")]
+        execution_id: String,
+        #[serde(rename = "stepId")]
+        step_id: String,
+        #[serde(rename = "reasonCode")]
+        reason_code: String,
+        message: String,
+        timestamp: u64,
+        #[serde(rename = "sequenceNumber")]
+        sequence_number: u32,
+    },
+    PolicyApprovalRequired {
+        #[serde(rename = "executionId")]
+        execution_id: String,
+        #[serde(rename = "stepId")]
+        step_id: String,
+        #[serde(rename = "approvalId")]
+        approval_id: String,
+        #[serde(rename = "actionFingerprint")]
+        action_fingerprint: String,
+        prompt: String,
+        timestamp: u64,
+        #[serde(rename = "sequenceNumber")]
+        sequence_number: u32,
+    },
+    PolicyApproved {
+        #[serde(rename = "executionId")]
+        execution_id: String,
+        #[serde(rename = "stepId")]
+        step_id: String,
+        #[serde(rename = "approvalId")]
+        approval_id: String,
+        timestamp: u64,
+        #[serde(rename = "sequenceNumber")]
+        sequence_number: u32,
+    },
 }

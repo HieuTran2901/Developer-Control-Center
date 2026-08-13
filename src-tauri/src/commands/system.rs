@@ -45,14 +45,24 @@ pub fn open_browser_command(url: String) -> Result<(), DesktopError> {
 
 #[tauri::command]
 pub fn open_folder_command(path: String) -> Result<(), DesktopError> {
+    let target_path = std::path::Path::new(&path);
+    let abs_path = if target_path.is_relative() {
+        std::env::current_dir().unwrap_or_default().join(target_path)
+    } else {
+        target_path.to_path_buf()
+    };
+
+    let canonical_path = std::fs::canonicalize(&abs_path).unwrap_or(abs_path);
+    let clean_str = crate::commands::pipeline_cmds::clean_path_string(&canonical_path);
+
     #[cfg(target_os = "windows")]
-    let res = Command::new("explorer").arg(&path).spawn();
+    let res = Command::new("explorer").arg(&clean_str).spawn();
 
     #[cfg(target_os = "macos")]
-    let res = Command::new("open").arg(&path).spawn();
+    let res = Command::new("open").arg(&clean_str).spawn();
 
     #[cfg(target_os = "linux")]
-    let res = Command::new("xdg-open").arg(&path).spawn();
+    let res = Command::new("xdg-open").arg(&clean_str).spawn();
 
     match res {
         Ok(_) => Ok(()),

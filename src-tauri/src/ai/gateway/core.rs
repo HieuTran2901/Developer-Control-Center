@@ -123,11 +123,23 @@ impl AIGateway {
     }
 
     async fn execute_gateway_loop(&self, request: &AIRequest) -> Result<AIResponse, AIError> {
+        // Resolve default provider ID if requested
+        let resolved_provider_id = if request.provider_id == "default" {
+            self.metadata_store
+                .list()
+                .iter()
+                .find(|p| p.is_default)
+                .map(|p| p.id.clone())
+                .ok_or_else(|| AIError::ProviderNotFound("No default AI provider configured".into()))?
+        } else {
+            request.provider_id.clone()
+        };
+
         // 3. Resolve Provider Metadata
         let provider_config = self
             .metadata_store
-            .get(&request.provider_id)
-            .ok_or_else(|| AIError::ProviderNotFound(format!("Provider ID '{}' not found", request.provider_id)))?;
+            .get(&resolved_provider_id)
+            .ok_or_else(|| AIError::ProviderNotFound(format!("Provider ID '{}' not found", resolved_provider_id)))?;
 
         if !provider_config.enabled {
             return Err(AIError::ProviderUnavailable(format!("Provider '{}' is disabled", provider_config.name)));
@@ -136,7 +148,7 @@ impl AIGateway {
         // 4. Resolve Credential securely from Rust CredentialStore
         let secret = self
             .credential_store
-            .get_secret(&request.provider_id)
+            .get_secret(&resolved_provider_id)
             .map_err(|e| AIError::Internal(e.message))?
             .unwrap_or_default();
 
@@ -156,13 +168,16 @@ impl AIGateway {
         let base_url = provider_config.base_url.clone();
         let model = request.model.clone().unwrap_or(provider_config.model.clone());
 
+        let mut resolved_request = request.clone();
+        resolved_request.provider_id = resolved_provider_id;
+
         // 6. Bounded Retry Loop (Max 2 retries = 3 attempts)
         let mut attempt = 0;
         loop {
             attempt += 1;
 
             let result = adapter
-                .send_request(&self.http_client, &base_url, &model, &secret, request)
+                .send_request(&self.http_client, &base_url, &model, &secret, &resolved_request)
                 .await;
 
             match result {

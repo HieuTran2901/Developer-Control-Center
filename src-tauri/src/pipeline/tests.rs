@@ -26,9 +26,15 @@ mod domain_tests {
                     },
                     order: 1,
                     timeout_seconds: None,
+                provenance: None,
                 }],
             }],
             metadata: HashMap::new(),
+        triggers: None,
+        verification_status: Default::default(),
+        confidence_score: 0.0,
+        provenance: None,
+        status: Default::default(),
         }
     }
 
@@ -85,6 +91,7 @@ mod domain_tests {
                 },
                 order: 1,
                 timeout_seconds: None,
+            provenance: None,
             }],
         });
         assert!(validate_pipeline(&pipeline).is_ok());
@@ -199,6 +206,7 @@ mod executor_tests {
             },
             order: 1,
             timeout_seconds: None,
+        provenance: None,
         };
         let executor = MockStepExecutor;
         let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -221,6 +229,7 @@ mod executor_tests {
             },
             order: 1,
             timeout_seconds: None,
+        provenance: None,
         };
         let executor = MockStepExecutor;
         let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -242,6 +251,7 @@ mod executor_tests {
             },
             order: 1,
             timeout_seconds: None,
+        provenance: None,
         };
         let executor = MockStepExecutor;
         let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -270,6 +280,7 @@ mod executor_tests {
             },
             order: 1,
             timeout_seconds: None,
+        provenance: None,
         };
         let executor = AiStepExecutor;
         let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -292,6 +303,7 @@ mod executor_tests {
             },
             order: 1,
             timeout_seconds: None,
+        provenance: None,
         };
         let executor = AiStepExecutor;
         let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -347,6 +359,7 @@ mod executor_tests {
             },
             order: 1,
             timeout_seconds: None,
+        provenance: None,
         };
 
         let executor = AiStepExecutor;
@@ -418,6 +431,7 @@ mod executor_tests {
             },
             order: 1,
             timeout_seconds: None,
+        provenance: None,
         };
 
         let executor = AiStepExecutor;
@@ -467,6 +481,7 @@ mod execution_lifecycle_tests {
                             },
                             order: 1,
                             timeout_seconds: None,
+                        provenance: None,
                         },
                         PipelineStep {
                             id: "step-1-2".into(),
@@ -478,6 +493,7 @@ mod execution_lifecycle_tests {
                             },
                             order: 2,
                             timeout_seconds: None,
+                        provenance: None,
                         },
                     ],
                 },
@@ -496,11 +512,17 @@ mod execution_lifecycle_tests {
                             },
                             order: 1,
                             timeout_seconds: None,
+                        provenance: None,
                         },
                     ],
                 },
             ],
             metadata: HashMap::new(),
+        triggers: None,
+        verification_status: Default::default(),
+        confidence_score: 0.0,
+        provenance: None,
+        status: Default::default(),
         }
     }
 
@@ -693,5 +715,8 @@ mod observability_tests {
         assert!(serialized.contains("[REDACTED_SECRET]"));
     }
 }
+
+
+
 
 

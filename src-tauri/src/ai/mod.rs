@@ -3,6 +3,7 @@ pub mod gateway;
 pub mod metadata_store;
 pub mod models;
 pub mod service;
+pub mod planner;
 
 #[cfg(test)]
 mod credential_store_test;

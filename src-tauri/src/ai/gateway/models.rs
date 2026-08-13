@@ -62,6 +62,15 @@ pub enum AIError {
     ProviderNotFound(String),
     CredentialNotFound(String),
     Internal(String),
+    AIProviderError(String),
+    AIProviderAuthError(String),
+    AIProviderTimeout(String),
+    AISafetyRefusal(String),
+    AIEmptyResponse,
+    AIInvalidJson(String),
+    AIInvalidPipelineDefinition(String),
+    AIPolicyDenied(String),
+    AIPolicyApprovalRequired(String),
 }
 
 impl std::fmt::Display for AIError {
@@ -77,6 +86,15 @@ impl std::fmt::Display for AIError {
             AIError::ProviderNotFound(msg) => write!(f, "Provider Not Found: {}", msg),
             AIError::CredentialNotFound(msg) => write!(f, "Credential Not Found: {}", msg),
             AIError::Internal(msg) => write!(f, "Internal Error: {}", msg),
+            AIError::AIProviderError(msg) => write!(f, "AI Provider Error: {}", msg),
+            AIError::AIProviderAuthError(msg) => write!(f, "AI Provider Authentication Error: {}", msg),
+            AIError::AIProviderTimeout(msg) => write!(f, "AI Provider Timeout: {}", msg),
+            AIError::AISafetyRefusal(msg) => write!(f, "AI Safety Refusal: {}", msg),
+            AIError::AIEmptyResponse => write!(f, "AI Empty Response"),
+            AIError::AIInvalidJson(msg) => write!(f, "AI Invalid JSON: {}", msg),
+            AIError::AIInvalidPipelineDefinition(msg) => write!(f, "AI Invalid Pipeline Definition: {}", msg),
+            AIError::AIPolicyDenied(msg) => write!(f, "AI Policy Denied: {}", msg),
+            AIError::AIPolicyApprovalRequired(msg) => write!(f, "AI Policy Approval Required: {}", msg),
         }
     }
 }

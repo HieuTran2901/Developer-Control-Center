@@ -69,4 +69,7 @@ pub struct PipelineStep {
     pub config: StepConfig,
     pub order: u32,
     pub timeout_seconds: Option<u64>,
+    
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::pipeline::domain::provenance::PipelineStepProvenance>,
 }

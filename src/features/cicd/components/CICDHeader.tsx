@@ -1,8 +1,25 @@
 import { Icon } from '@/shared/components/ui/Icon';
 import { Button } from '@/shared/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/shared/components/ui/dropdown-menu';
+import { useWorkspace } from '@/shared/hooks/useWorkspace';
+import { usePipelineContext } from '../context/PipelineContext';
+import { useNavigate } from 'react-router-dom';
 
 export function CICDHeader() {
+  const { workspace } = useWorkspace();
+  const { selectedProject, setSelectedProjectId, setActiveTab } = usePipelineContext();
+  const navigate = useNavigate();
+
+  const handleNewPipelineClick = () => {
+    if (!selectedProject) {
+      // Could show a toast here if we imported useToast, but for now just don't do anything
+      // or open the tab which will show the "please select project" message
+    }
+    setActiveTab('pipelines');
+  };
+
+  const hasProjects = workspace?.projects && workspace.projects.length > 0;
+
   return (
     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
       <div className="flex flex-col gap-1">
@@ -17,16 +34,32 @@ export function CICDHeader() {
       <div className="flex items-center gap-2">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-9 gap-2 bg-muted/20 border-border/40">
-              <Icon name="Box" size={16} className="text-green-500 shrink-0" />
-              market-frontend
-              <Icon name="ChevronDown" size={14} className="text-muted-foreground shrink-0" />
+            <Button variant="outline" size="sm" className="h-9 gap-2 bg-muted/20 border-border/40 min-w-[140px] justify-between">
+              <div className="flex items-center gap-2 overflow-hidden">
+                <Icon name="Box" size={16} className="text-green-500 shrink-0" />
+                <span className="truncate">
+                  {selectedProject ? selectedProject.name : 'Select Project'}
+                </span>
+              </div>
+              <Icon name="ChevronDown" size={14} className="text-muted-foreground shrink-0 ml-2" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem>market-frontend</DropdownMenuItem>
-            <DropdownMenuItem>market-backend</DropdownMenuItem>
-            <DropdownMenuItem>ai-service</DropdownMenuItem>
+          <DropdownMenuContent align="end" className="w-[200px]">
+            {hasProjects ? (
+              workspace.projects.map((project) => (
+                <DropdownMenuItem 
+                  key={project.id} 
+                  onClick={() => setSelectedProjectId(project.id)}
+                  className={selectedProject?.id === project.id ? 'bg-muted' : ''}
+                >
+                  {project.name}
+                </DropdownMenuItem>
+              ))
+            ) : (
+              <DropdownMenuItem onClick={() => navigate('/workspace')}>
+                No projects. Go to Workspace.
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -54,10 +87,13 @@ export function CICDHeader() {
           />
         </div>
         
-        <Button size="sm" className="h-9 gap-2 ml-2 bg-blue-600 hover:bg-blue-700 text-white">
+        <Button 
+          size="sm" 
+          className="h-9 gap-2 ml-2 bg-blue-600 hover:bg-blue-700 text-white"
+          onClick={handleNewPipelineClick}
+        >
           <Icon name="Plus" size={16} className="shrink-0" />
           New Pipeline
-          <Icon name="ChevronDown" size={14} className="shrink-0 ml-1 opacity-70" />
         </Button>
       </div>
     </div>

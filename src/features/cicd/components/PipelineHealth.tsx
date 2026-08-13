@@ -2,10 +2,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui
 import { Icon } from '@/shared/components/ui/Icon';
 import { Button } from '@/shared/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/shared/components/ui/dropdown-menu';
-import { mockHealthStats } from '../data/mockCICDData';
+import { usePipelineContext } from '../context/PipelineContext';
 
 export function PipelineHealth() {
-  const { total, success, failed, cancelled, running } = mockHealthStats;
+  const { healthStats: { total, success, failed, cancelled, running } } = usePipelineContext();
   
   // Calculate stroke dasharrays for the donut chart
   const radius = 60;
