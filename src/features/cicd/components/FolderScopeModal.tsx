@@ -217,9 +217,10 @@ export function FolderScopeModal({
                   </div>
 
                   <p className="text-xs text-muted-foreground">
-                    {analysis.isBudgetExceeded
-                      ? '⚠ Scan scope is too large. Discovery was stopped to protect system resources. Please select a specific project.'
-                      : 'This folder contains multiple project candidates or nested modules. Please select one to analyze.'}
+                    {analysis.reason ||
+                      (analysis.isBudgetExceeded
+                        ? '⚠ Scan scope is too large. Discovery was stopped to protect system resources. Please select a specific project.'
+                        : 'This folder contains multiple project candidates or nested modules. Please select one to analyze.')}
                   </p>
                 </div>
 

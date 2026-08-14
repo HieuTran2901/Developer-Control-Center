@@ -35,24 +35,40 @@ export function PipelineGenerator() {
   const activePath = customPath || selectedProject?.rootPath;
   const projectName = customPath ? activePath?.split(/[/\\]/).pop() : selectedProject?.name;
   
-  // Initial scan when workspace project is loaded
+  // Track active scan generation to prevent stale async race conditions
+  const scanGenerationRef = useRef(0);
+
+  // Synchronize intelligence whenever the selected workspace project changes
   useEffect(() => {
-    if (activePath && !customPath && scanState === 'idle') {
-      scanProject(activePath);
+    if (!customPath) {
+      if (selectedProject?.rootPath) {
+        scanProject(selectedProject.rootPath);
+      } else {
+        setIntelligence(null);
+        setScanState('idle');
+      }
     }
-  }, [activePath, customPath]);
+  }, [selectedProject?.id, selectedProject?.rootPath, customPath]);
 
   const scanProject = async (path: string) => {
+    const generation = ++scanGenerationRef.current;
+    // Invalidate stale data immediately upon starting scan
+    setIntelligence(null);
     setScanState('scanning');
     setError('');
+    
     try {
       const result = await invoke<any>('scan_project_cmd', { projectRootPath: path });
-      setIntelligence(result);
-      setScanState('complete');
+      if (scanGenerationRef.current === generation) {
+        setIntelligence(result);
+        setScanState('complete');
+      }
     } catch (err: any) {
       console.error('Failed to scan project:', err);
-      setError(err.toString());
-      setScanState('error');
+      if (scanGenerationRef.current === generation) {
+        setError(err.toString());
+        setScanState('error');
+      }
     }
   };
 
@@ -83,6 +99,12 @@ export function PipelineGenerator() {
       
       if (!analysisAbortedRef.current) {
         setScopeAnalysis(analysis);
+        // If a single clearly identified normal project is detected, auto-select and auto-scan
+        if (analysis.classification === 'SAFE') {
+          setIsScopeModalOpen(false);
+          setCustomPath(analysis.rootPath);
+          scanProject(analysis.rootPath);
+        }
       }
     } catch (err: any) {
       console.error('Scope analysis failed:', err);
@@ -123,8 +145,11 @@ export function PipelineGenerator() {
 
   const handleUseWorkspace = () => {
     setCustomPath(null);
+    setIntelligence(null);
     if (selectedProject?.rootPath) {
       scanProject(selectedProject.rootPath);
+    } else {
+      setScanState('idle');
     }
   };
 
