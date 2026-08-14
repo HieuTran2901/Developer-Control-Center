@@ -189,7 +189,7 @@ export function WorkspaceSidebar({
                             <Button 
                               variant="ghost" 
                               size="sm" 
-                              className="h-20 w-20 p-0 opacity-0 group-hover:opacity-100 hover:bg-muted/50 rounded shrink-0" 
+                              className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 hover:bg-muted/50 rounded shrink-0" 
                               onClick={(e) => { e.stopPropagation(); onCreateProfile(project.id); }}
                               title="New Profile"
                             >

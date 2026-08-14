@@ -197,7 +197,7 @@ export function WorkspacePage() {
             className="bg-transparent hover:bg-transparent shadow-none px-3.5 h-9 rounded-none text-xs flex items-center border-r border-blue-400/30"
             onClick={handleOpenCreateProjectDialog}
           >
-            <Icon name="Plus" className="mr-2 h-16 w-16 text-white" />
+            <Icon name="Plus" className="mr-2 h-4 w-4 text-white" />
             New Project
           </Button>
           <Button
