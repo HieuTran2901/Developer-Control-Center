@@ -15,7 +15,22 @@ export default function App() {
   console.log('[DEBUG 1 App.tsx] App rendering, mounting WorkspaceProvider');
   useEffect(() => {
     console.log('[DEBUG 1 App.tsx] App useEffect setupDesktopIpc()');
-    setupDesktopIpc();
+    let unlisten: (() => void) | undefined;
+    let isMounted = true;
+    
+    setupDesktopIpc().then((fn) => {
+      unlisten = fn;
+      if (!isMounted && unlisten) {
+        unlisten();
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
   }, []);
 
   return (

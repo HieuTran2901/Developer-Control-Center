@@ -53,7 +53,7 @@ const processEventHandlers: Record<string, ProcessEventHandler> = {
 };
 
 export async function setupDesktopIpc() {
-  await listen<ProcessEventPayload>('process_event', (event) => {
+  return await listen<ProcessEventPayload>('process_event', (event) => {
     const { type, payload } = event.payload;
     const { projectId, profileId } = payload;
     const id = `${projectId}-${profileId}`;
