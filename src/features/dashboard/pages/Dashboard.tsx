@@ -42,15 +42,6 @@ function getRuntimeStyle(nameOrCmd: string) {
   return RUNTIME_ICONS.default;
 }
 
-function formatUptime(startMs?: number) {
-  if (!startMs) return '—';
-  const diff = Date.now() - startMs;
-  const h = Math.floor(diff / 3600000);
-  const m = Math.floor((diff % 3600000) / 60000);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
-
 function formatBytes(b: number) {
   if (!b || b === 0) return '0 B';
   const k = 1024, sizes = ['B', 'KB', 'MB', 'GB'];
@@ -444,14 +435,12 @@ export function Dashboard() {
           <div className="overflow-x-auto min-w-full flex-1 flex flex-col">
             <div className="min-w-[600px] flex-1 flex flex-col">
               {/* Table Header */}
-              <div className="grid grid-cols-[2fr_80px_100px_100px_100px_80px_40px] gap-2 px-5 py-2.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-b border-border/30 shrink-0">
-                <span>Process</span>
-                <span>PID</span>
-                <span>CPU</span>
-                <span>RAM</span>
-                <span>Status</span>
-                <span>Uptime</span>
-                <span></span>
+              <div className="grid grid-cols-[minmax(180px,1fr)_70px_100px_90px_100px] gap-2 px-5 py-2.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-b border-border/30 shrink-0">
+                <span className="text-left">Process</span>
+                <span className="text-center">PID</span>
+                <span className="text-right">CPU</span>
+                <span className="text-right">RAM</span>
+                <span className="text-center">Status</span>
               </div>
 
               {/* Table Rows */}
@@ -494,7 +483,7 @@ export function Dashboard() {
                     renderedRows.push(
                         <div
                           key={`${project.id}-${profile.id}`}
-                          className="grid grid-cols-[2fr_80px_100px_100px_100px_80px_40px] gap-2 px-5 py-3 border-b border-border/20 hover:bg-muted/10 transition-colors items-center"
+                          className="grid grid-cols-[minmax(180px,1fr)_70px_100px_90px_100px] gap-2 px-5 py-3 border-b border-border/20 hover:bg-muted/10 transition-colors items-center"
                         >
                           <div className="flex items-center gap-2.5">
                             <div className={cn("w-8 h-8 rounded-md flex items-center justify-center shrink-0", style.bg)}>
@@ -505,16 +494,16 @@ export function Dashboard() {
                               <div className="text-[10px] text-muted-foreground truncate">{profile.command || 'Unknown'}</div>
                             </div>
                           </div>
-                          <div className="text-xs font-mono text-muted-foreground">
+                          <div className="text-xs font-mono text-muted-foreground text-center">
                             {profile.pid ?? '—'}
                           </div>
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 justify-end">
                             <span className="text-xs font-mono text-blue-400 w-10 text-right shrink-0">{currentCpu.toFixed(1)}%</span>
                             <SparklineChart data={cpuHistory} color="#60a5fa" height={18} width={48} />
                           </div>
-                          <div className="text-xs font-mono text-green-400">{currentMem > 0 ? formatBytes(currentMem) : '—'}</div>
+                          <div className="text-xs font-mono text-green-400 text-right">{currentMem > 0 ? formatBytes(currentMem) : '—'}</div>
                           <div className={cn(
-                            "flex items-center gap-1 text-xs font-semibold", 
+                            "flex items-center gap-1 text-xs font-semibold justify-center", 
                             healthColor
                           )}>
                             <Icon 
@@ -524,73 +513,6 @@ export function Dashboard() {
                             />
                             {healthStatus}
                           </div>
-                          <div className="text-[10px] text-muted-foreground">{formatUptime(profile.startTime)}</div>
-                          
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground animate-none"
-                              >
-                                <Icon name="MoreVertical" size={13} />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" side="bottom" sideOffset={8} className="w-[180px]">
-                              <DropdownMenuItem
-                                className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-blue-500/10 hover:text-blue-400 text-left transition-colors font-medium cursor-pointer"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActiveTerminal({ projectId: project.id, profileId: profile.id, name: profile.name });
-                                }}
-                              >
-                                <Icon name="Terminal" size={14} className="text-blue-400" />
-                                <span>Open Terminal</span>
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                className={cn(
-                                  "flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-muted/40 text-left transition-colors font-medium cursor-pointer",
-                                  (profile.readinessState === ReadinessState.Waiting || profile.status === ProcessState.Stopping) && "opacity-50 cursor-not-allowed hover:bg-transparent"
-                                )}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (profile.readinessState === ReadinessState.Waiting || profile.status === ProcessState.Stopping) return;
-                                  toggleService(project.id, profile);
-                                }}
-                              >
-                                <Icon 
-                                  name={profile?.status === ProcessState.Stopping ? 'Loader2' : (profile?.status === ProcessState.Running ? 'Square' : 'Play')} 
-                                  size={14} 
-                                  className={cn(
-                                    profile?.status === ProcessState.Stopping && "animate-spin text-muted-foreground",
-                                    profile?.status === ProcessState.Running && 'text-red-400',
-                                    profile?.status !== ProcessState.Running && profile?.status !== ProcessState.Stopping && 'text-green-400'
-                                  )} 
-                                />
-                                <span>
-                                  {profile?.status === ProcessState.Stopping 
-                                    ? 'Stopping...' 
-                                    : (profile?.status === ProcessState.Running ? 'Stop Service' : 'Start Service')}
-                                </span>
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                className="flex items-center gap-2.5 w-full px-3.5 py-2 hover:bg-muted/40 text-left transition-colors font-medium text-muted-foreground hover:text-foreground cursor-pointer"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  navigate('/workspace');
-                                }}
-                              >
-                                <Icon name="Settings2" size={14} />
-                                <span>Configure</span>
-                              </DropdownMenuItem>
-                              {profile.pid && (
-                                <div className="px-3.5 py-1.5 text-[10px] font-mono text-muted-foreground border-t border-border/30 mt-1 select-none">
-                                  PID: {profile.pid}
-                                </div>
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
                         </div>
                     );
                   });
@@ -609,7 +531,7 @@ export function Dashboard() {
                       renderedRows.push(
                         <div
                           key={`history-${h.pid}`}
-                          className="grid grid-cols-[2fr_80px_100px_100px_100px_80px_40px] gap-2 px-5 py-3 border-b border-border/20 hover:bg-muted/10 transition-colors items-center"
+                          className="grid grid-cols-[minmax(180px,1fr)_70px_100px_90px_100px] gap-2 px-5 py-3 border-b border-border/20 hover:bg-muted/10 transition-colors items-center"
                         >
                           <div className="flex items-center gap-2.5">
                             <div className="w-8 h-8 rounded-md bg-muted/20 flex items-center justify-center shrink-0">
@@ -620,20 +542,16 @@ export function Dashboard() {
                               <div className="text-[10px] text-muted-foreground">Process</div>
                             </div>
                           </div>
-                          <div className="text-xs font-mono text-muted-foreground">{h.pid}</div>
-                          <div className="flex items-center gap-1.5">
+                          <div className="text-xs font-mono text-muted-foreground text-center">{h.pid}</div>
+                          <div className="flex items-center gap-1.5 justify-end">
                             <span className="text-xs font-mono text-blue-400 w-10 text-right shrink-0">{currentCpu.toFixed(1)}%</span>
                             <SparklineChart data={h.cpu.slice(-12)} color="#60a5fa" height={18} width={48} />
                           </div>
-                          <div className="text-xs font-mono text-green-400">{formatBytes(currentMem)}</div>
-                          <div className={cn("flex items-center gap-1 text-xs font-semibold", healthColor)}>
+                          <div className="text-xs font-mono text-green-400 text-right">{formatBytes(currentMem)}</div>
+                          <div className={cn("flex items-center gap-1 text-xs font-semibold justify-center", healthColor)}>
                             <Icon name="ShieldCheck" size={12} />
                             {healthStatus}
                           </div>
-                          <div className="text-[10px] text-muted-foreground">—</div>
-                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground">
-                            <Icon name="MoreVertical" size={13} />
-                          </Button>
                         </div>
                       );
                     }
