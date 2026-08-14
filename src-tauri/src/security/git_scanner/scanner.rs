@@ -85,6 +85,10 @@ impl SecurityScanner for GitSecurityScanner {
                     let rest = captures.get(3).map_or("", |m| m.as_str());
 
                     let redacted_url = format!("{}REDACTED@{}", schema, rest);
+                    let bounded_url = crate::security::evidence::bound_evidence_string(
+                        &redacted_url,
+                        crate::security::evidence::DEFAULT_MAX_EVIDENCE_LENGTH,
+                    );
 
                     findings.push(SecurityFinding {
                         id: format!("git_remote_cred_{}_{}", path_str, line_num + 1),
@@ -94,7 +98,7 @@ impl SecurityScanner for GitSecurityScanner {
                         category: SecurityCategory::Git,
                         file_path: path_str.clone(),
                         line: Some(line_num + 1),
-                        evidence: Some(RedactedEvidence(redacted_url)),
+                        evidence: Some(RedactedEvidence(bounded_url)),
                         remediation: Some("Remove credentials from .git/config and use an external credential helper or SSH keys.".to_string()),
                         scanner_id: "git_scanner".to_string(),
                         confidence: 90,
@@ -183,4 +187,29 @@ mod tests {
 
         fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[tokio::test]
+    async fn test_git_security_scanner_long_url_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_dir = dir.path().join(".git");
+        fs::create_dir(&git_dir).unwrap();
+        let config_path = git_dir.join("config");
+
+        let long_path = "subpath/".repeat(100);
+        let config_content = format!(
+            "[remote \"origin\"]\n    url = https://username:password@github.com/{}.git",
+            long_path
+        );
+        fs::write(&config_path, config_content).unwrap();
+
+        let scanner = GitSecurityScanner::new();
+        let token = Arc::new(AtomicBool::new(false));
+        let findings = scanner.scan(&config_path, token).await.unwrap();
+
+        assert_eq!(findings.len(), 1);
+        let ev = findings[0].evidence.as_ref().unwrap();
+        assert!(ev.0.chars().count() <= crate::security::evidence::DEFAULT_MAX_EVIDENCE_LENGTH);
+        assert!(ev.0.starts_with("https://REDACTED@github.com/"));
+    }
 }
+

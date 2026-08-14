@@ -188,6 +188,13 @@ impl SecurityScanner for CoreSecretScanner {
                         // Generate unique ID based on path, line, and detector
                         let id = format!("{}:{}:{}", path_str, line_idx + 1, pattern.name);
 
+                        let match_range = caps.get(0).map(|m| (m.start(), m.end()));
+                        let raw_evidence = crate::security::evidence::extract_bounded_evidence(
+                            &line_str,
+                            match_range,
+                            crate::security::evidence::DEFAULT_MAX_EVIDENCE_LENGTH,
+                        );
+
                         findings.push(SecurityFinding {
                             id,
                             severity,
@@ -196,10 +203,8 @@ impl SecurityScanner for CoreSecretScanner {
                             description: format!("Detected possible {}", pattern.name),
                             file_path: path_str.clone(),
                             line: Some(line_idx + 1),
-                            // We pass the raw line to evidence, Engine will redact it
-                            evidence: Some(crate::security::domain::RedactedEvidence(
-                                line_str.trim().to_string(),
-                            )),
+                            // We pass the bounded line to evidence, Engine will redact and bound it
+                            evidence: Some(crate::security::domain::RedactedEvidence(raw_evidence)),
                             remediation: Some(
                                 "Remove secret or move to secure environment variable".to_string(),
                             ),
@@ -270,5 +275,28 @@ mod tests {
         let pk = patterns.iter().find(|p| p.name == "Private Key").unwrap();
         assert!(pk.regex.is_match("-----BEGIN RSA PRIVATE KEY-----"));
     }
+
+    #[tokio::test]
+    async fn test_minified_line_bounded_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("bundle.js");
+
+        let prefix = "console.log(1);".repeat(1000); // 15,000 chars
+        let secret = "const API_KEY=\"sk_live_12345678901234567890\";";
+        let suffix = "console.log(2);".repeat(1000); // 15,000 chars
+        let long_line = format!("{}{}{}", prefix, secret, suffix);
+        tokio::fs::write(&file_path, &long_line).await.unwrap();
+
+        let scanner = CoreSecretScanner::new();
+        let cancel_token = Arc::new(AtomicBool::new(false));
+        let findings = scanner.scan(&file_path, cancel_token).await.unwrap();
+
+        assert!(!findings.is_empty());
+        let finding = &findings[0];
+        let ev = finding.evidence.as_ref().unwrap();
+        assert!(ev.0.chars().count() <= crate::security::evidence::DEFAULT_MAX_EVIDENCE_LENGTH);
+        assert!(ev.0.contains("API_KEY="));
+    }
 }
+
 
