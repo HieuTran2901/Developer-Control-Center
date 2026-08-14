@@ -197,6 +197,15 @@ pub async fn trigger_pipeline(
 }
 
 #[tauri::command]
+pub async fn analyze_folder_scope_cmd(
+    folder_path: String,
+) -> Result<crate::pipeline::scope::FolderScopeAnalysis, String> {
+    let path = std::path::PathBuf::from(&folder_path);
+    let analysis = crate::pipeline::scope::FolderSafetyGuard::analyze_scope(&path);
+    Ok(analysis)
+}
+
+#[tauri::command]
 pub async fn scan_project_cmd(
     project_root_path: String,
 ) -> Result<crate::pipeline::discovery::ProjectIntelligence, String> {

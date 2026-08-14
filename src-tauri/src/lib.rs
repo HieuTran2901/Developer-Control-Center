@@ -27,7 +27,7 @@ use commands::system::{
 use commands::pipeline_cmds::{
     get_pipeline_execution_state, list_active_executions, submit_step_approval,
     get_pipelines, get_recent_executions, get_pipeline_health_stats, trigger_pipeline,
-    scan_project_cmd, generate_pipeline_cmd, export_pipeline_cmd, list_pending_approvals, get_approval,
+    analyze_folder_scope_cmd, scan_project_cmd, generate_pipeline_cmd, export_pipeline_cmd, list_pending_approvals, get_approval,
     approve_approval, reject_approval, request_new_approval,
 };
 use commands::config_cmds::{
@@ -165,6 +165,7 @@ pub fn run() {
             get_recent_executions,
             get_pipeline_health_stats,
             trigger_pipeline,
+            analyze_folder_scope_cmd,
             scan_project_cmd,
             generate_pipeline_cmd,
             export_pipeline_cmd,

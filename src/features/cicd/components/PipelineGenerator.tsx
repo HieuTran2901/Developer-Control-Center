@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 
@@ -7,6 +7,7 @@ import { Icon } from '@/shared/components/ui/Icon';
 import { PipelinePreview } from './PipelinePreview';
 import { usePipelineContext } from '../context/PipelineContext';
 import { Badge } from '@/shared/components/ui/badge';
+import { FolderScopeModal, FolderScopeAnalysis } from './FolderScopeModal';
 
 type ScanState = 'idle' | 'scanning' | 'complete' | 'error';
 
@@ -25,15 +26,21 @@ export function PipelineGenerator() {
   const [scanState, setScanState] = useState<ScanState>('idle');
   const [intelligence, setIntelligence] = useState<any | null>(null);
 
+  // Scope Guard State
+  const [isScopeModalOpen, setIsScopeModalOpen] = useState(false);
+  const [isAnalyzingScope, setIsAnalyzingScope] = useState(false);
+  const [scopeAnalysis, setScopeAnalysis] = useState<FolderScopeAnalysis | null>(null);
+  const analysisAbortedRef = useRef(false);
+
   const activePath = customPath || selectedProject?.rootPath;
   const projectName = customPath ? activePath?.split(/[/\\]/).pop() : selectedProject?.name;
   
-  // Auto-scan when active path changes
+  // Initial scan when workspace project is loaded
   useEffect(() => {
-    if (activePath) {
+    if (activePath && !customPath && scanState === 'idle') {
       scanProject(activePath);
     }
-  }, [activePath]);
+  }, [activePath, customPath]);
 
   const scanProject = async (path: string) => {
     setScanState('scanning');
@@ -56,15 +63,69 @@ export function PipelineGenerator() {
         multiple: false,
       });
       if (selected && typeof selected === 'string') {
-        setCustomPath(selected);
+        runScopeAnalysis(selected);
       }
     } catch (err) {
       console.error('Dialog error:', err);
     }
   };
 
+  const runScopeAnalysis = async (folderPath: string) => {
+    analysisAbortedRef.current = false;
+    setIsScopeModalOpen(true);
+    setIsAnalyzingScope(true);
+    setScopeAnalysis(null);
+
+    try {
+      const analysis = await invoke<FolderScopeAnalysis>('analyze_folder_scope_cmd', {
+        folderPath,
+      });
+      
+      if (!analysisAbortedRef.current) {
+        setScopeAnalysis(analysis);
+      }
+    } catch (err: any) {
+      console.error('Scope analysis failed:', err);
+      if (!analysisAbortedRef.current) {
+        setScopeAnalysis({
+          rootPath: folderPath,
+          classification: 'BLOCKED',
+          reason: `Failed to inspect folder: ${err.toString()}`,
+          estimatedFiles: 0,
+          estimatedDirectories: 0,
+          excludedDirectories: [],
+          projectCandidates: [],
+          isBudgetExceeded: false,
+          isCancelled: false,
+          scanDurationMs: 0,
+        });
+      }
+    } finally {
+      if (!analysisAbortedRef.current) {
+        setIsAnalyzingScope(false);
+      }
+    }
+  };
+
+  const handleScopeModalClose = () => {
+    analysisAbortedRef.current = true;
+    setIsScopeModalOpen(false);
+    setIsAnalyzingScope(false);
+    setScopeAnalysis(null);
+  };
+
+  const handleScopeProjectConfirmed = (targetPath: string) => {
+    setIsScopeModalOpen(false);
+    setScopeAnalysis(null);
+    setCustomPath(targetPath);
+    scanProject(targetPath);
+  };
+
   const handleUseWorkspace = () => {
     setCustomPath(null);
+    if (selectedProject?.rootPath) {
+      scanProject(selectedProject.rootPath);
+    }
   };
 
   const handleGenerate = async () => {
@@ -364,6 +425,15 @@ export function PipelineGenerator() {
         )}
         
       </div>
+
+      <FolderScopeModal
+        isOpen={isScopeModalOpen}
+        isAnalyzing={isAnalyzingScope}
+        analysis={scopeAnalysis}
+        onClose={handleScopeModalClose}
+        onSelectProject={handleScopeProjectConfirmed}
+        onChangeFolder={handleSelectFolder}
+      />
     </div>
   );
 }
