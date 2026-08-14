@@ -1,11 +1,14 @@
-﻿import { LogMessage } from '@/application/managers/LogBuffer';
+import { LogMessage } from '@/application/managers/LogBuffer';
 import { cn } from '@/shared/utils';
+import { AnsiParser } from './AnsiParser';
 
 export class TerminalRenderer {
   private container: HTMLDivElement;
   private maxDomLines: number;
   private isAutoScroll: boolean = true;
   private linesCount: number = 0;
+  private ansiParserStdout: AnsiParser = new AnsiParser();
+  private ansiParserStderr: AnsiParser = new AnsiParser();
 
   constructor(container: HTMLDivElement, maxDomLines: number = 500) {
     this.container = container;
@@ -18,7 +21,13 @@ export class TerminalRenderer {
     return d.toISOString().split('T')[1].replace('Z', '');
   }
 
-  private createLogElement(log: LogMessage): HTMLDivElement {
+  private createLogElement(log: LogMessage): HTMLDivElement | null {
+    const parser = log.streamType === 'stderr' ? this.ansiParserStderr : this.ansiParserStdout;
+    const segments = parser.parse(log.message);
+    
+    // If chunk contains only an incomplete ANSI sequence, skip rendering a new line for now
+    if (segments.length === 0) return null;
+
     const wrapper = document.createElement('div');
     wrapper.className = 'flex items-start space-x-3 font-mono text-sm leading-relaxed hover:bg-white/5 px-2 py-0.5 rounded transition-colors';
 
@@ -31,7 +40,21 @@ export class TerminalRenderer {
       'break-all whitespace-pre-wrap flex-1',
       log.streamType === 'stderr' ? 'text-red-400' : 'text-gray-200'
     );
-    contentSpan.textContent = log.message;
+    
+    for (const seg of segments) {
+      if (seg.text.length === 0) continue;
+      
+      if (!seg.fg && !seg.bold && !seg.dim) {
+        contentSpan.appendChild(document.createTextNode(seg.text));
+      } else {
+        const span = document.createElement('span');
+        span.textContent = seg.text;
+        if (seg.fg) span.style.color = seg.fg;
+        if (seg.bold) span.style.fontWeight = 'bold';
+        if (seg.dim) span.style.opacity = '0.7';
+        contentSpan.appendChild(span);
+      }
+    }
 
     wrapper.appendChild(timeSpan);
     wrapper.appendChild(contentSpan);
@@ -40,6 +63,7 @@ export class TerminalRenderer {
 
   public append(log: LogMessage) {
     const el = this.createLogElement(log);
+    if (!el) return;
     this.container.appendChild(el);
     this.linesCount++;
 
@@ -56,12 +80,20 @@ export class TerminalRenderer {
   public appendBatch(logs: LogMessage[]) {
     if (logs.length === 0) return;
     
+    let addedCount = 0;
     const fragment = document.createDocumentFragment();
     for (const log of logs) {
-      fragment.appendChild(this.createLogElement(log));
+      const el = this.createLogElement(log);
+      if (el) {
+        fragment.appendChild(el);
+        addedCount++;
+      }
     }
+    
+    if (addedCount === 0) return;
+    
     this.container.appendChild(fragment);
-    this.linesCount += logs.length;
+    this.linesCount += addedCount;
 
     if (this.isAutoScroll && this.linesCount > this.maxDomLines) {
       this.pruneDom();
@@ -100,6 +132,8 @@ export class TerminalRenderer {
   public clear() {
     this.container.innerHTML = '';
     this.linesCount = 0;
+    this.ansiParserStdout = new AnsiParser();
+    this.ansiParserStderr = new AnsiParser();
   }
 
   public getLinesCount(): number {
