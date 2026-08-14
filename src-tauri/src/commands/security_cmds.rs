@@ -3,6 +3,8 @@ use std::sync::Arc;
 use tauri::{command, AppHandle, State};
 
 use crate::security::domain::SecurityScanMode;
+use crate::security::project_context::SecurityProjectContext;
+use std::path::Path;
 
 #[command]
 pub async fn start_security_scan_cmd(
@@ -22,3 +24,16 @@ pub async fn cancel_security_scan_cmd(
 ) -> Result<(), String> {
     engine.cancel_scan(&scan_id).await
 }
+
+#[command]
+pub async fn get_security_project_context_cmd(
+    project_id: String,
+    root_path: String,
+) -> Result<SecurityProjectContext, String> {
+    let root = Path::new(&root_path);
+    if !root.exists() {
+        return Err("Project root directory does not exist".to_string());
+    }
+    Ok(SecurityProjectContext::from_root_path(project_id, root))
+}
+

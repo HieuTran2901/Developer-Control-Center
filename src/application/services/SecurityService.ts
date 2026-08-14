@@ -190,6 +190,15 @@ export class SecurityService {
     }
   }
 
+  public async getProjectContext(projectId: string, rootPath: string): Promise<import('../../domain/entities/SecurityProjectContext').SecurityProjectContext> {
+    try {
+      return await invoke<import('../../domain/entities/SecurityProjectContext').SecurityProjectContext>('get_security_project_context_cmd', { projectId, rootPath });
+    } catch (e) {
+      console.error('[SecurityService] Failed to get security project context', e);
+      throw e;
+    }
+  }
+
   public destroy() {
     if (this.unlistenSecurityEvent) {
       this.unlistenSecurityEvent();
