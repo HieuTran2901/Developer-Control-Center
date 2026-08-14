@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useWorkspace } from '@/shared/hooks/useWorkspace';
 import { securityService } from '@/application/services/SecurityService';
 import { EventBus, EventType } from '@/application/events/EventBus';
@@ -15,6 +16,21 @@ import { SecurityCapabilities } from '../components/SecurityCapabilities';
 import { SecurityHistoryList } from '../components/SecurityHistoryList';
 import { securityHistoryRepository } from '@/application/services';
 import { SecurityHistoryRecord } from '@/domain/entities/SecurityHistoryRecord';
+import { SecurityTargetTooBroadModal } from '../components/SecurityTargetTooBroadModal';
+import { SecurityMultiProjectModal, ProjectCandidate } from '../components/SecurityMultiProjectModal';
+
+interface FolderScopeAnalysis {
+  rootPath: string;
+  classification: 'SAFE' | 'LARGE' | 'BLOCKED';
+  reason?: string;
+  estimatedFiles: number;
+  estimatedDirectories: number;
+  excludedDirectories: string[];
+  projectCandidates: ProjectCandidate[];
+  isBudgetExceeded: boolean;
+  isCancelled: boolean;
+  scanDurationMs: number;
+}
 
 export function SecurityOverview() {
   const { workspace, session, updateSession } = useWorkspace();
@@ -44,6 +60,19 @@ export function SecurityOverview() {
 
   // Keep SecurityService activeTarget in sync whenever selectedTarget changes
   const activeTarget = selectedTarget;
+
+  // Target Guard Modal States
+  const [tooBroadModal, setTooBroadModal] = useState<{
+    isOpen: boolean;
+    path: string;
+    reason?: string;
+  }>({ isOpen: false, path: '' });
+
+  const [multiProjectModal, setMultiProjectModal] = useState<{
+    isOpen: boolean;
+    parentPath: string;
+    candidates: ProjectCandidate[];
+  }>({ isOpen: false, parentPath: '', candidates: [] });
 
   useEffect(() => {
     // If workspace loads asynchronously and no target was set yet, resolve from workspace/session
@@ -142,6 +171,63 @@ export function SecurityOverview() {
     };
   }, [scanId]);
 
+  const validateAndApplyTarget = async (selectedPath: string) => {
+    try {
+      const analysis = await invoke<FolderScopeAnalysis>('analyze_folder_scope_cmd', {
+        folderPath: selectedPath,
+      });
+
+      // 1. Filesystem root / broad / blocked target
+      if (analysis.classification === 'BLOCKED') {
+        // Do NOT change selectedTarget. Show warning modal.
+        setTooBroadModal({
+          isOpen: true,
+          path: selectedPath,
+          reason: analysis.reason,
+        });
+        return;
+      }
+
+      // 2. Folder contains multiple projects
+      if (analysis.projectCandidates.length > 1) {
+        // Do NOT change selectedTarget yet. Show project selection modal.
+        setMultiProjectModal({
+          isOpen: true,
+          parentPath: selectedPath,
+          candidates: analysis.projectCandidates,
+        });
+        return;
+      }
+
+      // 3. Single project or safe folder
+      const candidate = analysis.projectCandidates[0];
+      const targetPath = candidate?.path || selectedPath;
+      const name = candidate?.name || selectedPath.split(/[/\\]/).pop() || selectedPath;
+      const matchedProj = workspace?.projects?.find(
+        (p) => p.rootPath.toLowerCase() === targetPath.toLowerCase()
+      );
+      const newTarget = { name, path: targetPath, id: matchedProj?.id };
+      setSelectedTarget(newTarget);
+      securityService.setSelectedTarget(newTarget);
+      if (matchedProj) {
+        updateSession({ selectedProjectId: matchedProj.id });
+      }
+    } catch (e) {
+      console.error('Target validation failed:', e);
+      // Fallback safely if IPC failed: treat as standard folder
+      const name = selectedPath.split(/[/\\]/).pop() || selectedPath;
+      const matchedProj = workspace?.projects?.find(
+        (p) => p.rootPath.toLowerCase() === selectedPath.toLowerCase()
+      );
+      const newTarget = { name, path: selectedPath, id: matchedProj?.id };
+      setSelectedTarget(newTarget);
+      securityService.setSelectedTarget(newTarget);
+      if (matchedProj) {
+        updateSession({ selectedProjectId: matchedProj.id });
+      }
+    }
+  };
+
   const handleChangeTarget = async () => {
     try {
       const selectedPath = await open({
@@ -149,22 +235,60 @@ export function SecurityOverview() {
         multiple: false,
       });
       if (selectedPath && typeof selectedPath === 'string') {
-        const name = selectedPath.split(/[/\\]/).pop() || selectedPath;
-        const matchedProj = workspace?.projects?.find(p => p.rootPath.toLowerCase() === selectedPath.toLowerCase());
-        const newTarget = { name, path: selectedPath, id: matchedProj?.id };
-        setSelectedTarget(newTarget);
-        securityService.setSelectedTarget(newTarget);
-        if (matchedProj) {
-          updateSession({ selectedProjectId: matchedProj.id });
-        }
+        await validateAndApplyTarget(selectedPath);
       }
     } catch (e) {
       console.error('Failed to open dialog', e);
     }
   };
 
+  const handleSelectMultiProjectCandidate = (candidate: ProjectCandidate) => {
+    setMultiProjectModal({ isOpen: false, parentPath: '', candidates: [] });
+    const matchedProj = workspace?.projects?.find(
+      (p) => p.rootPath.toLowerCase() === candidate.path.toLowerCase()
+    );
+    const newTarget = { name: candidate.name, path: candidate.path, id: matchedProj?.id };
+    setSelectedTarget(newTarget);
+    securityService.setSelectedTarget(newTarget);
+    if (matchedProj) {
+      updateSession({ selectedProjectId: matchedProj.id });
+    }
+  };
+
+  const handleReopenFolderPicker = async () => {
+    setTooBroadModal({ isOpen: false, path: '' });
+    setMultiProjectModal({ isOpen: false, parentPath: '', candidates: [] });
+    await handleChangeTarget();
+  };
+
   const handleStartScan = async () => {
     if (!activeTarget) return;
+
+    // Safety guard: prevent scanning blocked filesystem roots
+    try {
+      const analysis = await invoke<FolderScopeAnalysis>('analyze_folder_scope_cmd', {
+        folderPath: activeTarget.path,
+      });
+      if (analysis.classification === 'BLOCKED') {
+        setTooBroadModal({
+          isOpen: true,
+          path: activeTarget.path,
+          reason: analysis.reason,
+        });
+        return;
+      }
+      if (analysis.projectCandidates.length > 1) {
+        setMultiProjectModal({
+          isOpen: true,
+          parentPath: activeTarget.path,
+          candidates: analysis.projectCandidates,
+        });
+        return;
+      }
+    } catch (e) {
+      console.warn('Pre-scan target validation check warning:', e);
+    }
+
     try {
       const projectId = (activeTarget as any).id || 'custom-target';
       await securityService.startSecurityScan(projectId, activeTarget.path, scanMode);
@@ -226,7 +350,25 @@ export function SecurityOverview() {
           <SecurityHistoryList historyRecords={historyRecords} />
         )}
       </div>
+
+      <SecurityTargetTooBroadModal
+        isOpen={tooBroadModal.isOpen}
+        targetPath={tooBroadModal.path}
+        reason={tooBroadModal.reason}
+        onClose={() => setTooBroadModal({ isOpen: false, path: '' })}
+        onChooseFolder={handleReopenFolderPicker}
+      />
+
+      <SecurityMultiProjectModal
+        isOpen={multiProjectModal.isOpen}
+        parentPath={multiProjectModal.parentPath}
+        candidates={multiProjectModal.candidates}
+        onClose={() => setMultiProjectModal({ isOpen: false, parentPath: '', candidates: [] })}
+        onSelectProject={handleSelectMultiProjectCandidate}
+        onChangeFolder={handleReopenFolderPicker}
+      />
     </div>
   );
 }
+
 
