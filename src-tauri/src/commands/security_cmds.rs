@@ -4,6 +4,7 @@ use tauri::{command, AppHandle, State};
 
 use crate::security::domain::SecurityScanMode;
 use crate::security::project_context::SecurityProjectContext;
+use crate::security::scan_planner::{SecurityScanPlan, SecurityScanPlanner};
 use std::path::Path;
 
 #[command]
@@ -36,4 +37,20 @@ pub async fn get_security_project_context_cmd(
     }
     Ok(SecurityProjectContext::from_root_path(project_id, root))
 }
+
+#[command]
+pub async fn get_security_scan_plan_cmd(
+    project_id: String,
+    root_path: String,
+    mode: Option<SecurityScanMode>,
+) -> Result<SecurityScanPlan, String> {
+    let root = Path::new(&root_path);
+    if !root.exists() {
+        return Err("Project root directory does not exist".to_string());
+    }
+    let context = SecurityProjectContext::from_root_path(project_id, root);
+    let plan = SecurityScanPlanner::plan(&context, mode.unwrap_or(SecurityScanMode::Full));
+    Ok(plan)
+}
+
 

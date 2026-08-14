@@ -199,6 +199,15 @@ export class SecurityService {
     }
   }
 
+  public async getScanPlan(projectId: string, rootPath: string, mode?: string): Promise<import('../../domain/entities/SecurityScanPlan').SecurityScanPlan> {
+    try {
+      return await invoke<import('../../domain/entities/SecurityScanPlan').SecurityScanPlan>('get_security_scan_plan_cmd', { projectId, rootPath, mode });
+    } catch (e) {
+      console.error('[SecurityService] Failed to get security scan plan', e);
+      throw e;
+    }
+  }
+
   public destroy() {
     if (this.unlistenSecurityEvent) {
       this.unlistenSecurityEvent();

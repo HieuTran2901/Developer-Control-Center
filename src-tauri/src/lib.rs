@@ -19,7 +19,7 @@ use commands::fs_cmds::{get_app_data_dir_cmd, read_text_file_cmd, write_text_fil
 use commands::runtime_cmds::{
     force_stop_process_cmd, restart_process_cmd, start_process_cmd, stop_process_cmd,
 };
-use commands::security_cmds::{cancel_security_scan_cmd, get_security_project_context_cmd, start_security_scan_cmd};
+use commands::security_cmds::{cancel_security_scan_cmd, get_security_project_context_cmd, get_security_scan_plan_cmd, start_security_scan_cmd};
 use commands::system::{
     get_app_version_command, get_system_info_command, open_browser_command, open_folder_command,
     ping_command, read_directory_command,
@@ -147,6 +147,7 @@ pub fn run() {
             start_security_scan_cmd,
             cancel_security_scan_cmd,
             get_security_project_context_cmd,
+            get_security_scan_plan_cmd,
             ai_provider_list_cmd,
             ai_provider_create_cmd,
             ai_provider_update_cmd,
