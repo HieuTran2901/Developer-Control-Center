@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useWorkspace } from '@/shared/hooks/useWorkspace';
 import { securityService } from '@/application/services/SecurityService';
@@ -11,7 +11,6 @@ import { SecurityScanTarget } from '../components/SecurityScanTarget';
 import { SecurityStatusMetrics } from '../components/SecurityStatusMetrics';
 import { SecurityTabs } from '../components/SecurityTabs';
 import { SecurityActiveFindings } from '../components/SecurityActiveFindings';
-import { SecurityCapabilities } from '../components/SecurityCapabilities';
 
 import { SecurityHistoryList } from '../components/SecurityHistoryList';
 import { securityHistoryRepository } from '@/application/services';
@@ -34,6 +33,7 @@ interface FolderScopeAnalysis {
 
 export function SecurityOverview() {
   const { workspace, session, updateSession } = useWorkspace();
+  const requestIdRef = useRef(0);
 
   // Selected Target Resolution Logic:
   // 1. SecurityService cached target (user explicitly changed target during this session)
@@ -172,14 +172,50 @@ export function SecurityOverview() {
   }, [scanId]);
 
   const validateAndApplyTarget = async (selectedPath: string) => {
+    const currentRequestId = ++requestIdRef.current;
+
+    // 1. Immediately invalidate old target state & UI indicators
+    const interimTarget = {
+      name: 'Analyzing project...',
+      path: selectedPath,
+    };
+    setSelectedTarget(interimTarget);
+    securityService.setSelectedTarget(interimTarget);
+    setSummary(null);
+    setFindings([]);
+    setStatus('IDLE');
+    setScanId(null);
+    setProgress({ scannedFiles: 0, currentScanner: '' });
+
+    // Clean session selected project ID immediately if ad-hoc path
+    const matchedImmediate = workspace?.projects?.find(
+      (p) => p.rootPath.toLowerCase() === selectedPath.toLowerCase()
+    );
+    if (matchedImmediate) {
+      updateSession({ selectedProjectId: matchedImmediate.id });
+    } else if (session?.selectedProjectId) {
+      updateSession({ selectedProjectId: undefined });
+    }
+
     try {
       const analysis = await invoke<FolderScopeAnalysis>('analyze_folder_scope_cmd', {
         folderPath: selectedPath,
       });
 
+      // Stale response / race condition protection
+      if (requestIdRef.current !== currentRequestId) {
+        return;
+      }
+
+      // Path identity validation
+      if (analysis.rootPath.toLowerCase() !== selectedPath.toLowerCase()) {
+        return;
+      }
+
       // 1. Filesystem root / broad / blocked target
       if (analysis.classification === 'BLOCKED') {
-        // Do NOT change selectedTarget. Show warning modal.
+        setSelectedTarget(null);
+        securityService.setSelectedTarget(null);
         setTooBroadModal({
           isOpen: true,
           path: selectedPath,
@@ -188,14 +224,25 @@ export function SecurityOverview() {
         return;
       }
 
-      // 2. Folder contains multiple projects
-      if (analysis.projectCandidates.length > 1) {
-        // Do NOT change selectedTarget yet. Show project selection modal.
-        setMultiProjectModal({
-          isOpen: true,
-          parentPath: selectedPath,
-          candidates: analysis.projectCandidates,
-        });
+      // 2. Folder is large / multi-project / broad non-project container
+      if (analysis.classification === 'LARGE') {
+        setSelectedTarget(null);
+        securityService.setSelectedTarget(null);
+        if (analysis.projectCandidates.length > 1) {
+          // Show project selection modal.
+          setMultiProjectModal({
+            isOpen: true,
+            parentPath: selectedPath,
+            candidates: analysis.projectCandidates,
+          });
+        } else {
+          // Broad container / non-project directory with 0 or 1 candidate
+          setTooBroadModal({
+            isOpen: true,
+            path: selectedPath,
+            reason: analysis.reason || 'Selected directory is a broad container and not a project root.',
+          });
+        }
         return;
       }
 
@@ -207,12 +254,18 @@ export function SecurityOverview() {
         (p) => p.rootPath.toLowerCase() === targetPath.toLowerCase()
       );
       const newTarget = { name, path: targetPath, id: matchedProj?.id };
+
       setSelectedTarget(newTarget);
       securityService.setSelectedTarget(newTarget);
       if (matchedProj) {
         updateSession({ selectedProjectId: matchedProj.id });
+      } else if (session?.selectedProjectId) {
+        updateSession({ selectedProjectId: undefined });
       }
     } catch (e) {
+      if (requestIdRef.current !== currentRequestId) {
+        return;
+      }
       console.error('Target validation failed:', e);
       // Fallback safely if IPC failed: treat as standard folder
       const name = selectedPath.split(/[/\\]/).pop() || selectedPath;
@@ -224,6 +277,8 @@ export function SecurityOverview() {
       securityService.setSelectedTarget(newTarget);
       if (matchedProj) {
         updateSession({ selectedProjectId: matchedProj.id });
+      } else if (session?.selectedProjectId) {
+        updateSession({ selectedProjectId: undefined });
       }
     }
   };
@@ -243,15 +298,23 @@ export function SecurityOverview() {
   };
 
   const handleSelectMultiProjectCandidate = (candidate: ProjectCandidate) => {
+    requestIdRef.current += 1;
     setMultiProjectModal({ isOpen: false, parentPath: '', candidates: [] });
     const matchedProj = workspace?.projects?.find(
       (p) => p.rootPath.toLowerCase() === candidate.path.toLowerCase()
     );
     const newTarget = { name: candidate.name, path: candidate.path, id: matchedProj?.id };
+    setSummary(null);
+    setFindings([]);
+    setStatus('IDLE');
+    setScanId(null);
+    setProgress({ scannedFiles: 0, currentScanner: '' });
     setSelectedTarget(newTarget);
     securityService.setSelectedTarget(newTarget);
     if (matchedProj) {
       updateSession({ selectedProjectId: matchedProj.id });
+    } else if (session?.selectedProjectId) {
+      updateSession({ selectedProjectId: undefined });
     }
   };
 
@@ -277,12 +340,20 @@ export function SecurityOverview() {
         });
         return;
       }
-      if (analysis.projectCandidates.length > 1) {
-        setMultiProjectModal({
-          isOpen: true,
-          parentPath: activeTarget.path,
-          candidates: analysis.projectCandidates,
-        });
+      if (analysis.classification === 'LARGE') {
+        if (analysis.projectCandidates.length > 1) {
+          setMultiProjectModal({
+            isOpen: true,
+            parentPath: activeTarget.path,
+            candidates: analysis.projectCandidates,
+          });
+        } else {
+          setTooBroadModal({
+            isOpen: true,
+            path: activeTarget.path,
+            reason: analysis.reason || 'Selected target is too broad to scan.',
+          });
+        }
         return;
       }
     } catch (e) {
@@ -334,16 +405,12 @@ export function SecurityOverview() {
         />
 
         {activeTab === 'overview' && (
-          <>
-            <SecurityActiveFindings 
-              findings={findings}
-              status={status}
-              onRunScan={handleStartScan}
-              hasTarget={!!activeTarget}
-            />
-
-            <SecurityCapabilities />
-          </>
+          <SecurityActiveFindings 
+            findings={findings}
+            status={status}
+            onRunScan={handleStartScan}
+            hasTarget={!!activeTarget}
+          />
         )}
 
         {activeTab === 'history' && (
@@ -370,5 +437,4 @@ export function SecurityOverview() {
     </div>
   );
 }
-
 

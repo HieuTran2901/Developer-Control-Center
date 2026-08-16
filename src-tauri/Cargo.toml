@@ -36,6 +36,8 @@ quick-xml = { version = "0.41.0", features = ["serialize"] }
 keyring = "2.1.0"
 uuid = { version = "1.24.0", features = ["v4"] }
 url = "2.5.8"
+sha2 = "0.10"
+base64 = "0.22"
 async-trait = "0.1.92"
 walkdir = "2.5.0"
 

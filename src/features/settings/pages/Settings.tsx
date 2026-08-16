@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui
 import { Button } from '@/shared/components/ui/button';
 import { Icon } from '@/shared/components/ui/Icon';
 import { AIProviders } from '../components/AIProviders';
+import { QuotaDiscoveryPanel } from '../components/QuotaDiscoveryPanel';
 import { desktopHealthService } from '@/application/services';
 import { HealthStatus } from '@/application/services/DesktopHealthService';
 
@@ -28,11 +29,12 @@ export function Settings() {
 
   return (
     <PageContainer title="Settings" description="Manage your application preferences and configurations.">
-      <Tabs defaultValue="appearance" className="w-full max-w-4xl animate-in fade-in duration-500">
+      <Tabs defaultValue="ai-providers" className="w-full max-w-5xl animate-in fade-in duration-500">
         <TabsList className="mb-6">
+          <TabsTrigger value="ai-providers">AI Providers</TabsTrigger>
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           <TabsTrigger value="developer">Developer Options</TabsTrigger>
-          <TabsTrigger value="ai-providers">AI Providers</TabsTrigger>
+          <TabsTrigger value="quota-discovery">AG Diagnostics</TabsTrigger>
           <TabsTrigger value="health">System Health</TabsTrigger>
           <TabsTrigger value="about">About</TabsTrigger>
         </TabsList>
@@ -76,6 +78,10 @@ export function Settings() {
 
         <TabsContent value="ai-providers">
           <AIProviders />
+        </TabsContent>
+
+        <TabsContent value="quota-discovery">
+          <QuotaDiscoveryPanel />
         </TabsContent>
 
         <TabsContent value="health">

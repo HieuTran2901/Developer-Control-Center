@@ -1,4 +1,4 @@
-﻿# Developer Control Center
+# Developer Control Center
 
 Developer Control Center is a powerful desktop application built with React, Tauri, and Rust that provides an integrated environment to manage, start, and monitor various development projects (Spring Boot, React, Node.js...) via a graphical interface.
 
@@ -37,6 +37,8 @@ Developer Control Center is a powerful desktop application built with React, Tau
 - [Desktop API](api/desktop-api.md)
 - [Audit Reports](reports/desktop-audit.md)
 - [Capability Tests](reports/capability-test.md)
+- [AI Quota OAuth & RFC 7636 PKCE Report](reports/oauth_token_exchange_pkce_hardening_report.md)
+
 
 
 

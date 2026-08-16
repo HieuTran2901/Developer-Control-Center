@@ -60,6 +60,13 @@ export class SecurityService {
   }
 
   public setSelectedTarget(target: SecurityTargetState | null) {
+    if (this.stateCache.activeTarget?.path !== target?.path) {
+      this.stateCache.summary = null;
+      this.stateCache.findings = [];
+      this.stateCache.status = 'IDLE';
+      this.stateCache.scanId = null;
+      this.stateCache.progress = { scannedFiles: 0, currentScanner: '' };
+    }
     this.stateCache.activeTarget = target;
   }
 

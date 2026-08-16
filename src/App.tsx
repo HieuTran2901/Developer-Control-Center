@@ -10,6 +10,7 @@ import { WorkspaceProvider } from './shared/hooks/useWorkspace';
 import { ToastProvider } from './shared/hooks/useToast';
 import { SecurityOverview } from './features/security/pages/SecurityOverview';
 import { CICDOverview } from './features/cicd/pages/CICDOverview';
+import { AIQuotaPage } from './features/quota/pages/AIQuotaPage';
 
 export default function App() {
   console.log('[DEBUG 1 App.tsx] App rendering, mounting WorkspaceProvider');
@@ -47,6 +48,7 @@ export default function App() {
               <Route path="logs" element={<PlaceholderPage title="Logs" icon="List" />} />
               <Route path="security" element={<SecurityOverview />} />
               <Route path="cicd" element={<CICDOverview />} />
+              <Route path="ai-quota" element={<AIQuotaPage />} />
               <Route path="settings" element={<Settings />} />
               <Route path="about" element={<PlaceholderPage title="About" icon="Info" />} />
             </Route>

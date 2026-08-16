@@ -15,7 +15,15 @@ pub async fn start_security_scan_cmd(
     engine: State<'_, Arc<SecurityEngine>>,
     app: AppHandle,
 ) -> Result<String, String> {
-    engine.start_scan(project_id, root_path, mode.unwrap_or(SecurityScanMode::Full), app).await
+    let scan_mode = mode.unwrap_or(SecurityScanMode::Full);
+    let root = Path::new(&root_path);
+    let plan = if root.exists() {
+        let context = SecurityProjectContext::from_root_path(project_id.clone(), root);
+        Some(SecurityScanPlanner::plan(&context, scan_mode))
+    } else {
+        None
+    };
+    engine.start_scan(project_id, root_path, scan_mode, plan, app).await
 }
 
 #[command]

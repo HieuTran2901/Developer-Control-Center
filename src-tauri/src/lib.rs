@@ -62,7 +62,31 @@ pub fn run() {
         .manage(monitor_state)
         .setup(move |app| {
             monitor::init_monitor_worker(app.handle().clone(), watched_pids);
+
+            // AG-9.28 + AG-9.29: Attach AppHandle, reconnect startup accounts, and start background polling safely
+            let polling_engine = {
+                let state = app.state::<monitor::MonitorState>();
+                state.polling_engine.clone()
+            };
+            let app_handle_for_quota = app.handle().clone();
+
+            tauri::async_runtime::spawn(async move {
+                polling_engine.set_app_handle(app_handle_for_quota).await;
+
+                // AG-9.29: Initial reconnect pass on startup for accounts with auto_connect enabled
+                let _ = polling_engine.reconnect_startup_accounts().await;
+
+                let settings = polling_engine.get_refresh_settings().await;
+                if settings.auto_refresh_enabled {
+                    if let Err(e) = polling_engine.start().await {
+                        eprintln!("[QuotaEngine] Non-fatal auto-start error: {}", e);
+                    }
+                }
+            });
+
             let registry = RuntimeRegistry::new();
+
+
             let manager = Arc::new(ProcessManager::new(registry, app.handle().clone()));
             let controller = Arc::new(ProcessController::new(manager));
             app.manage(controller);
@@ -129,8 +153,38 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            monitor::get_antigravity_local_quota_cmd,
+            monitor::verify_antigravity_quota_runtime_cmd,
             monitor::watch_pid_cmd,
             monitor::unwatch_pid_cmd,
+
+            monitor::discover_antigravity_quota_endpoints_cmd,
+            monitor::correlate_antigravity_usage_cmd,
+            monitor::start_usage_trace_cmd,
+            monitor::discover_local_usage_sources_cmd,
+            monitor::discover_usage_protocol_cmd,
+            monitor::get_antigravity_account_quota_cmd,
+            monitor::verify_antigravity_quota_path_cmd,
+            monitor::quota_list_accounts_cmd,
+            monitor::quota_register_account_cmd,
+            monitor::quota_remove_account_cmd,
+            monitor::quota_set_account_enabled_cmd,
+            monitor::quota_set_account_auto_connect_cmd,
+            monitor::quota_reconnect_startup_accounts_cmd,
+            monitor::quota_rename_account_cmd,
+
+            monitor::quota_get_account_state_cmd,
+            monitor::quota_get_all_states_cmd,
+            monitor::quota_refresh_account_cmd,
+            monitor::quota_refresh_all_cmd,
+            monitor::quota_get_polling_status_cmd,
+            monitor::quota_get_refresh_settings_cmd,
+            monitor::quota_update_refresh_settings_cmd,
+            monitor::quota_start_monitoring_cmd,
+            monitor::quota_stop_monitoring_cmd,
+            monitor::quota_connect_google_account_cmd,
+            monitor::verify_antigravity_oauth_configuration_cmd,
+
             ping_command,
             get_app_version_command,
             open_browser_command,

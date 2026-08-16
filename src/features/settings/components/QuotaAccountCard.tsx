@@ -1,0 +1,789 @@
+import { useState, useEffect, useRef } from 'react';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/shared/components/ui/card';
+import { Button } from '@/shared/components/ui/button';
+import { Icon } from '@/shared/components/ui/Icon';
+import { AccountPollingState, AccountQuotaSnapshot } from '@/domain/entities/QuotaPolling';
+import { ModelQuota } from '@/domain/entities/QuotaProvider';
+
+export type ConnectStage =
+  | 'idle'
+  | 'detecting'
+  | 'connecting'
+  | 'reading'
+  | 'connected'
+  | 'failed';
+
+interface QuotaAccountCardProps {
+  snapshot: AccountQuotaSnapshot;
+  onRefresh: (accountId: string) => Promise<void>;
+  onToggleEnabled: (accountId: string, enabled: boolean) => Promise<void>;
+  onToggleAutoConnect?: (accountId: string, autoConnect: boolean) => Promise<void>;
+  onRename: (accountId: string, displayName: string | null) => Promise<void>;
+  onRemove: (accountId: string) => Promise<void>;
+  isRefreshing: boolean;
+}
+
+export function QuotaAccountCard({
+  snapshot,
+  onRefresh,
+  onToggleEnabled,
+  onToggleAutoConnect,
+  onRename,
+  onRemove,
+  isRefreshing,
+}: QuotaAccountCardProps) {
+  const [relativeSyncTime, setRelativeSyncTime] = useState<string>('');
+  const [, setTick] = useState(0);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [newDisplayName, setNewDisplayName] = useState(snapshot.displayName || '');
+  const [isConfirmingRemove, setIsConfirmingRemove] = useState(false);
+  const [connectStage, setConnectStage] = useState<ConnectStage>('idle');
+  const [connectStatusMessage, setConnectStatusMessage] = useState<string | null>(null);
+  const [connectErrorMessage, setConnectErrorMessage] = useState<string | null>(null);
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const toggleGroup = (groupId: string) => {
+    setExpandedGroupIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  };
+
+  // Close menu on click outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Update relative timestamps and countdown ticker every second
+  useEffect(() => {
+    function updateTimestamps() {
+      if (snapshot.lastSuccessfulSyncAt) {
+        setRelativeSyncTime(formatRelativeTime(snapshot.lastSuccessfulSyncAt));
+      } else {
+        setRelativeSyncTime('');
+      }
+      setTick((t) => (t + 1) % 100000);
+    }
+
+    updateTimestamps();
+    const interval = setInterval(updateTimestamps, 1000);
+    return () => clearInterval(interval);
+  }, [snapshot.lastSuccessfulSyncAt, snapshot.quota]);
+
+  const isDefaultAccount = snapshot.accountId === 'default';
+  const isDisabled = snapshot.status === 'Disabled';
+  const isStale =
+    (snapshot.status === 'NetworkError' || snapshot.status === 'ProviderError') &&
+    snapshot.quota !== null;
+
+  const handleSaveRename = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await onRename(snapshot.accountId, newDisplayName.trim() || null);
+    setIsRenaming(false);
+  };
+
+  const handleConnectLocalAntigravity = async () => {
+    setConnectStage('detecting');
+    setConnectStatusMessage('Detecting running Antigravity process...');
+    setConnectErrorMessage(null);
+
+    setTimeout(() => {
+      setConnectStage((prev) => (prev === 'detecting' ? 'connecting' : prev));
+      setConnectStatusMessage('Connecting to local Language Server RPC...');
+    }, 300);
+
+    setTimeout(() => {
+      setConnectStage((prev) => (prev === 'connecting' ? 'reading' : prev));
+      setConnectStatusMessage('Reading live model quota metrics...');
+    }, 600);
+
+    try {
+      await onRefresh(snapshot.accountId);
+      setConnectStage('connected');
+      setConnectStatusMessage('✓ Connected to Antigravity Local Runtime.');
+
+      setTimeout(() => {
+        setConnectStage('idle');
+        setConnectStatusMessage(null);
+        setConnectErrorMessage(null);
+      }, 2000);
+    } catch (err: any) {
+      setConnectStage('failed');
+      setConnectErrorMessage(
+        err?.message ||
+          snapshot.errorMessage ||
+          'Antigravity is not currently running. Please launch Antigravity to monitor quota.'
+      );
+      setConnectStatusMessage(null);
+    }
+  };
+
+  return (
+    <>
+      <Card
+        className={`flex flex-col justify-between border-border bg-surface shadow-xs hover:shadow-sm transition-all rounded-xl relative overflow-hidden h-auto ${
+          isDisabled ? 'opacity-70 bg-muted/20' : ''
+        }`}
+      >
+        {/* Compact Card Header */}
+        <CardHeader className="py-2.5 px-3.5 border-b border-border/40 bg-muted/5 space-y-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-primary/15 text-primary border border-primary/25 shrink-0 uppercase tracking-wider">
+                {snapshot.provider ? snapshot.provider.replace('_', ' ') : 'ANTIGRAVITY'}
+              </span>
+              {isDefaultAccount && (
+                <span className="px-1 py-0.2 rounded text-[9px] font-semibold bg-muted text-muted-foreground border shrink-0">
+                  DEFAULT
+                </span>
+              )}
+
+              {isRenaming ? (
+                <form onSubmit={handleSaveRename} className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={newDisplayName}
+                    onChange={(e) => setNewDisplayName(e.target.value)}
+                    className="px-2 py-0.5 text-xs rounded bg-background border border-border text-foreground font-semibold focus:outline-none focus:ring-1 focus:ring-primary"
+                    autoFocus
+                  />
+                  <Button type="submit" variant="ghost" size="sm" className="h-6 w-6 p-0">
+                    <Icon name="Check" className="w-3.5 h-3.5 text-success" />
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => setIsRenaming(false)}
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                  >
+                    <Icon name="X" className="w-3.5 h-3.5 text-muted-foreground" />
+                  </Button>
+                </form>
+              ) : (
+                <h3
+                  className="font-semibold text-xs text-foreground truncate"
+                  title={snapshot.displayName || snapshot.email}
+                >
+                  {snapshot.displayName || snapshot.email}
+                </h3>
+              )}
+
+              <span className="text-[11px] text-muted-foreground truncate hidden md:inline">
+                · {snapshot.tier || 'Standard Tier'} · {snapshot.email}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <StatusBadge status={snapshot.status} errorMessage={snapshot.errorMessage} />
+
+              {/* Three dots kebab menu */}
+              <div className="relative" ref={menuRef}>
+                <Button
+                  onClick={() => setIsMenuOpen((prev) => !prev)}
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground rounded-md"
+                  title="More actions"
+                >
+                  <Icon name="MoreVertical" className="w-3.5 h-3.5" />
+                </Button>
+
+                {isMenuOpen && (
+                  <div className="absolute right-0 top-7 z-30 w-44 rounded-lg bg-surface border border-border shadow-lg py-1 text-xs font-sans animate-in fade-in-50 duration-100">
+                    <button
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        onRefresh(snapshot.accountId);
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-foreground hover:bg-muted/50 flex items-center gap-2"
+                    >
+                      <Icon name="RefreshCw" className="w-3.5 h-3.5 text-muted-foreground" />
+                      <span>Refresh Quota</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        onToggleEnabled(snapshot.accountId, isDisabled);
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-foreground hover:bg-muted/50 flex items-center gap-2"
+                    >
+                      <Icon
+                        name={isDisabled ? 'Play' : 'Pause'}
+                        className="w-3.5 h-3.5 text-muted-foreground"
+                      />
+                      <span>{isDisabled ? 'Enable Monitoring' : 'Disable Monitoring'}</span>
+                    </button>
+
+                    {onToggleAutoConnect && (
+                      <button
+                        onClick={() => {
+                          setIsMenuOpen(false);
+                          const currentAuto = snapshot.autoConnect ?? true;
+                          onToggleAutoConnect(snapshot.accountId, !currentAuto);
+                        }}
+                        className="w-full px-3 py-1.5 text-left text-foreground hover:bg-muted/50 flex items-center justify-between gap-2"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Icon name="Zap" className="w-3.5 h-3.5 text-muted-foreground" />
+                          <span>Auto-connect on startup</span>
+                        </div>
+                        <span className="text-[10px] font-semibold text-primary">
+                          {(snapshot.autoConnect ?? true) ? 'ON' : 'OFF'}
+                        </span>
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        setNewDisplayName(snapshot.displayName || snapshot.email);
+                        setIsRenaming(true);
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-foreground hover:bg-muted/50 flex items-center gap-2"
+                    >
+                      <Icon name="Edit2" className="w-3.5 h-3.5 text-muted-foreground" />
+                      <span>Rename Account</span>
+                    </button>
+
+                    <div className="my-1 border-t border-border" />
+
+                    <button
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        setIsConfirmingRemove(true);
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-destructive hover:bg-destructive/10 flex items-center gap-2"
+                    >
+                      <Icon name="Trash2" className="w-3.5 h-3.5 text-destructive" />
+                      <span>Remove Account</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+
+        {/* Compact Card Content */}
+        <CardContent className="p-3 space-y-2.5 flex-1">
+          {/* Stale Data Warning Banner */}
+          {isStale && (
+            <div className="flex items-center gap-2 p-2 rounded-lg bg-warning/10 border border-warning/20 text-xs text-warning font-sans">
+              <Icon name="AlertTriangle" className="w-3.5 h-3.5 shrink-0" />
+              <span>Using last known quota {relativeSyncTime ? `· Last updated ${relativeSyncTime}` : ''}</span>
+            </div>
+          )}
+
+          {/* Antigravity Not Running / Auth Required / Mismatch Banner */}
+          {(snapshot.status === 'AuthRequired' || !snapshot.quota) && (
+            <div className="p-2.5 rounded-lg bg-muted/30 border border-border/70 text-xs space-y-1.5 font-sans">
+              <div className="flex items-center gap-1.5 font-semibold text-foreground text-xs">
+                {snapshot.errorMessage?.includes('Account mismatch') ? (
+                  <>
+                    <Icon name="AlertTriangle" className="w-3.5 h-3.5 text-warning shrink-0" />
+                    <span className="text-warning font-semibold">Account Identity Mismatch</span>
+                  </>
+                ) : (
+                  <>
+                    <Icon name="Cpu" className="w-3.5 h-3.5 text-primary shrink-0" />
+                    <span>Antigravity Local Runtime Offline</span>
+                  </>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-normal">
+                {snapshot.errorMessage ||
+                  snapshot.quota?.safeDiagnosticMessage ||
+                  'Antigravity is not currently running. Please launch Antigravity to monitor live quota.'}
+              </p>
+
+              {connectErrorMessage && (
+                <div className="p-1.5 rounded bg-destructive/10 border border-destructive/20 text-destructive text-[10px] flex items-center gap-1">
+                  <Icon name="AlertTriangle" className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{connectErrorMessage}</span>
+                </div>
+              )}
+
+              {connectStatusMessage && (
+                <div className="p-1.5 rounded bg-primary/10 border border-primary/20 text-primary text-[10px] flex items-center gap-1 font-medium">
+                  <Icon name="Loader2" className="w-3 h-3 animate-spin shrink-0" />
+                  <span>{connectStatusMessage}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Monitoring Disabled Banner */}
+          {isDisabled && (
+            <div className="p-2 rounded-lg bg-muted/30 border text-xs text-muted-foreground flex items-center gap-2">
+              <Icon name="Pause" className="w-3.5 h-3.5 shrink-0" />
+              <span>Monitoring is paused for this account.</span>
+            </div>
+          )}
+
+          {/* Horizontal Quota Pool Groups Grid */}
+          {(() => {
+            const quotaGroups = groupModelsIntoQuotaPools(snapshot.quota?.models || []);
+
+            if (quotaGroups.length > 0) {
+              return (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                  {quotaGroups.map((group) => {
+                    const remainingPctNumber = getRemainingPercentageNumber(
+                      group.remainingFraction,
+                      group.remainingPercentage
+                    );
+                    const pctFormatted = formatQuotaPercentage(
+                      group.remainingFraction,
+                      group.remainingPercentage
+                    );
+                    const countdown = formatResetCountdown(group.resetAt);
+                    const isExpanded = expandedGroupIds.has(group.id);
+
+                    return (
+                      <div
+                        key={group.id}
+                        className="p-2 rounded-lg bg-muted/25 border border-border/60 flex flex-col justify-between space-y-1.5 font-sans hover:border-border transition-colors"
+                      >
+                        {/* Header Row: Name & Percentage */}
+                        <div className="flex items-center justify-between text-xs gap-1">
+                          <span
+                            className="font-semibold text-foreground truncate text-[11px]"
+                            title={group.groupName}
+                          >
+                            {group.groupName}
+                          </span>
+                          <span className="font-mono font-bold text-foreground text-xs shrink-0">
+                            {pctFormatted}
+                          </span>
+                        </div>
+
+                        {/* Progress Bar (Rendered ONCE per shared group) */}
+                        <div className="w-full bg-muted/80 rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${
+                              remainingPctNumber <= 15
+                                ? 'bg-destructive'
+                                : remainingPctNumber <= 40
+                                ? 'bg-warning'
+                                : 'bg-primary'
+                            }`}
+                            style={{ width: `${remainingPctNumber}%` }}
+                          />
+                        </div>
+
+                        {/* Metadata Row: Models count & Countdown */}
+                        <div className="flex items-center justify-between text-[10px] text-muted-foreground gap-1">
+                          <span className="truncate">
+                            {group.isShared ? `${group.models.length} models · ` : 'Individual · '}
+                            {countdown}
+                          </span>
+                          <span className="font-medium shrink-0">
+                            {group.status === 'Available' ? 'Ready' : group.status}
+                          </span>
+                        </div>
+
+                        {/* Expand / Collapse Control for shared groups */}
+                        {group.isShared && (
+                          <div className="pt-1 border-t border-border/30">
+                            <button
+                              type="button"
+                              onClick={() => toggleGroup(group.id)}
+                              className="w-full flex items-center justify-between text-[10px] font-medium text-muted-foreground hover:text-foreground py-0.5 transition-colors group/btn"
+                            >
+                              <span className="flex items-center gap-1 truncate">
+                                <Icon
+                                  name={isExpanded ? 'ChevronDown' : 'ChevronRight'}
+                                  className="w-3 h-3 text-primary shrink-0 transition-transform"
+                                />
+                                <span className="truncate">
+                                  {isExpanded
+                                    ? 'Hide models'
+                                    : `${group.models.length} models using this`}
+                                </span>
+                              </span>
+                              <span className="text-[9px] text-muted-foreground group-hover/btn:text-foreground shrink-0">
+                                {isExpanded ? 'Collapse' : 'Expand'}
+                              </span>
+                            </button>
+
+                            {/* Nested Model List */}
+                            {isExpanded && (
+                              <div className="mt-1 pl-2 border-l-2 border-primary/40 space-y-1 max-h-32 overflow-y-auto pr-1 animate-in fade-in duration-150">
+                                {group.models.map((model) => (
+                                  <div
+                                    key={model.modelId}
+                                    className="flex items-center justify-between text-[10px] gap-1"
+                                  >
+                                    <span
+                                      className="text-foreground truncate flex-1"
+                                      title={model.displayName}
+                                    >
+                                      {model.displayName}
+                                    </span>
+                                    <span className="text-[9px] text-muted-foreground shrink-0">
+                                      {model.status === 'Available' ? 'Ready' : model.status}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            }
+
+            if (snapshot.status === 'Online') {
+              return (
+                <div className="text-center py-3 text-xs text-muted-foreground font-sans">
+                  Quota capacity connected.
+                </div>
+              );
+            }
+
+            return null;
+          })()}
+        </CardContent>
+
+        {/* Compact Card Footer */}
+        <CardFooter className="py-2 px-3.5 border-t border-border/40 bg-muted/5 flex items-center justify-between text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-1 text-[11px]">
+            <Icon name="Clock" className="w-3 h-3 text-muted-foreground shrink-0" />
+            <span>
+              {relativeSyncTime ? `Updated ${relativeSyncTime}` : 'Not synced yet'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {(!snapshot.quota || snapshot.status !== 'Online') && (
+              <Button
+                onClick={handleConnectLocalAntigravity}
+                disabled={connectStage !== 'idle' && connectStage !== 'failed'}
+                size="sm"
+                className="h-6 px-2 text-[11px] font-medium gap-1 bg-primary text-primary-foreground hover:bg-primary/90 transition-all"
+              >
+                {connectStage === 'idle' && (
+                  <>
+                    <Icon name="Cpu" className="w-3 h-3" />
+                    <span>Connect Antigravity</span>
+                  </>
+                )}
+                {connectStage === 'detecting' && (
+                  <>
+                    <Icon name="Loader2" className="w-3 h-3 animate-spin" />
+                    <span>Detecting...</span>
+                  </>
+                )}
+                {connectStage === 'connecting' && (
+                  <>
+                    <Icon name="Loader2" className="w-3 h-3 animate-spin" />
+                    <span>Connecting...</span>
+                  </>
+                )}
+                {connectStage === 'reading' && (
+                  <>
+                    <Icon name="Loader2" className="w-3 h-3 animate-spin" />
+                    <span>Reading Quota...</span>
+                  </>
+                )}
+                {connectStage === 'connected' && (
+                  <>
+                    <Icon name="CheckCircle" className="w-3 h-3 text-emerald-400" />
+                    <span>Connected</span>
+                  </>
+                )}
+                {connectStage === 'failed' && (
+                  <>
+                    <Icon name="RefreshCw" className="w-3 h-3" />
+                    <span>Retry Detection</span>
+                  </>
+                )}
+              </Button>
+            )}
+
+            <Button
+              onClick={() => onRefresh(snapshot.accountId)}
+              disabled={isRefreshing || isDisabled}
+              variant="outline"
+              size="sm"
+              className="h-6 px-2 text-[11px] font-medium gap-1"
+            >
+              <Icon
+                name={isRefreshing ? 'Loader2' : 'RefreshCw'}
+                className={`w-3 h-3 ${isRefreshing ? 'animate-spin text-primary' : ''}`}
+              />
+              <span>{isRefreshing ? 'Refreshing' : 'Refresh'}</span>
+            </Button>
+          </div>
+        </CardFooter>
+      </Card>
+
+      {/* Remove Account Confirmation Dialog */}
+      {isConfirmingRemove && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <Card className="border-border bg-surface shadow-2xl">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm flex items-center gap-2 text-destructive">
+                  <Icon name="AlertTriangle" className="w-4 h-4" />
+                  Remove Account?
+                </CardTitle>
+                <CardDescription className="text-xs text-foreground font-semibold pt-1">
+                  "{snapshot.displayName || snapshot.email}"
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="text-xs text-muted-foreground space-y-2">
+                <p>
+                  This removes the account from quota monitoring in Developer Control Center.
+                </p>
+              </CardContent>
+              <CardFooter className="pt-2 pb-3 flex items-center justify-end gap-2 border-t bg-muted/10">
+                <Button
+                  onClick={() => setIsConfirmingRemove(false)}
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={async () => {
+                    setIsConfirmingRemove(false);
+                    await onRemove(snapshot.accountId);
+                  }}
+                  variant="destructive"
+                  size="sm"
+                  className="text-xs"
+                >
+                  Remove Account
+                </Button>
+              </CardFooter>
+            </Card>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function StatusBadge({ status, errorMessage }: { status: AccountPollingState; errorMessage?: string | null }) {
+  switch (status) {
+    case 'Online':
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-success/10 text-success border border-success/30 shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-success" />
+          Connected
+        </span>
+      );
+    case 'Checking':
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary border border-primary/30 shrink-0">
+          <Icon name="Loader2" className="w-2.5 h-2.5 animate-spin" />
+          Restoring...
+        </span>
+      );
+    case 'AuthRequired':
+      if (errorMessage?.includes('Account mismatch')) {
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-warning/10 text-warning border border-warning/30 shrink-0">
+            <Icon name="AlertTriangle" className="w-2.5 h-2.5" />
+            Identity Mismatch
+          </span>
+        );
+      }
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-warning/10 text-warning border border-warning/30 shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-warning" />
+          Antigravity Offline
+        </span>
+      );
+    case 'RateLimited':
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-warning/10 text-warning border border-warning/30 shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-warning" />
+          Rate Limited
+        </span>
+      );
+    case 'NetworkError':
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-destructive/10 text-destructive border border-destructive/30 shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
+          Offline
+        </span>
+      );
+    case 'ProviderError':
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-destructive/10 text-destructive border border-destructive/30 shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
+          Error
+        </span>
+      );
+    case 'Disabled':
+    default:
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-muted text-muted-foreground border border-border shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground" />
+          Disabled
+        </span>
+      );
+  }
+}
+
+function formatRelativeTime(timestampStr: string): string {
+  const ts = Number(timestampStr);
+  if (!ts || isNaN(ts)) return '';
+  const diffSecs = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (diffSecs < 10) return 'just now';
+  if (diffSecs < 60) return `${diffSecs}s ago`;
+  const diffMins = Math.floor(diffSecs / 60);
+  if (diffMins === 1) return '1m ago';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours === 1) return '1h ago';
+  return `${diffHours}h ago`;
+}
+
+function formatResetCountdown(resetAtStr: string | null | undefined): string {
+  if (!resetAtStr) return 'Reset unavailable';
+
+  const ts = Date.parse(resetAtStr) || Number(resetAtStr) * 1000;
+  if (!ts || isNaN(ts)) {
+    return `Reset: ${resetAtStr}`;
+  }
+
+  const diffMs = ts - Date.now();
+  if (diffMs <= 0) return 'Resets now';
+
+  const diffSecs = Math.floor(diffMs / 1000);
+  const hours = Math.floor(diffSecs / 3600);
+  const minutes = Math.floor((diffSecs % 3600) / 60);
+
+  if (hours > 24) {
+    return 'Reset tomorrow';
+  }
+  if (hours > 0 && minutes > 0) {
+    return `Reset ${hours}h ${minutes.toString().padStart(2, '0')}m`;
+  }
+  if (hours > 0) {
+    return `Reset ${hours}h`;
+  }
+  if (minutes > 0) {
+    return `Reset ${minutes}m`;
+  }
+  return `Reset ${diffSecs}s`;
+}
+
+export interface QuotaGroupViewModel {
+  id: string;
+  groupName: string;
+  remainingFraction: number | null;
+  remainingPercentage: number | null;
+  resetAt: string | null;
+  status: string;
+  isShared: boolean;
+  models: ModelQuota[];
+}
+
+export function groupModelsIntoQuotaPools(models: ModelQuota[]): QuotaGroupViewModel[] {
+  if (!models || models.length === 0) return [];
+
+  const groupsMap = new Map<string, ModelQuota[]>();
+
+  for (const model of models) {
+    const nameLower = (model.displayName || model.modelId).toLowerCase();
+    let family = 'other';
+    if (nameLower.includes('gemini')) family = 'gemini';
+    else if (nameLower.includes('claude')) family = 'claude';
+    else if (nameLower.includes('gpt')) family = 'gpt';
+    else if (nameLower.includes('deepseek')) family = 'deepseek';
+
+    // Format fraction to 4 decimal places to avoid floating point mismatch
+    const fractionKey =
+      model.remainingFraction !== null && model.remainingFraction !== undefined
+        ? Number(model.remainingFraction).toFixed(4)
+        : 'null';
+    const resetKey = model.resetAt || 'none';
+    const statusKey = model.status || 'unknown';
+
+    const groupKey = `${family}::${fractionKey}::${resetKey}::${statusKey}`;
+
+    if (!groupsMap.has(groupKey)) {
+      groupsMap.set(groupKey, []);
+    }
+    groupsMap.get(groupKey)!.push(model);
+  }
+
+  const result: QuotaGroupViewModel[] = [];
+
+  for (const [key, groupModels] of groupsMap.entries()) {
+    const isShared = groupModels.length > 1;
+    const first = groupModels[0];
+
+    let groupName = first.displayName || first.modelId;
+    if (isShared) {
+      const family = key.split('::')[0];
+      if (family === 'gemini') groupName = 'Gemini Shared';
+      else if (family === 'claude') groupName = 'Claude Shared';
+      else if (family === 'gpt') groupName = 'GPT Shared';
+      else if (family === 'deepseek') groupName = 'DeepSeek Shared';
+      else groupName = 'Shared Quota';
+    }
+
+    result.push({
+      id: key,
+      groupName,
+      remainingFraction: first.remainingFraction,
+      remainingPercentage: first.remainingPercentage,
+      resetAt: first.resetAt,
+      status: first.status,
+      isShared,
+      models: groupModels,
+    });
+  }
+
+  return result;
+}
+
+function formatQuotaPercentage(
+  fraction: number | null | undefined,
+  percentage: number | null | undefined
+): string {
+  if (percentage !== null && percentage !== undefined && !isNaN(percentage)) {
+    return `${Number(percentage).toFixed(1)}%`;
+  }
+  if (fraction !== null && fraction !== undefined && !isNaN(fraction)) {
+    return `${(Number(fraction) * 100).toFixed(1)}%`;
+  }
+  return '100%';
+}
+
+function getRemainingPercentageNumber(
+  fraction: number | null | undefined,
+  percentage: number | null | undefined
+): number {
+  if (percentage !== null && percentage !== undefined && !isNaN(percentage)) {
+    return Math.max(0, Math.min(100, Math.round(percentage)));
+  }
+  if (fraction !== null && fraction !== undefined && !isNaN(fraction)) {
+    return Math.max(0, Math.min(100, Math.round(fraction * 100)));
+  }
+  return 100;
+}

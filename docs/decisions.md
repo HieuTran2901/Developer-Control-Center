@@ -133,3 +133,99 @@
 **Reason:** Giải quyết lỗi tiến trình con (như `node.exe`) vẫn chạy ngầm sau khi ấn Stop do lệnh `child.kill()` chỉ diệt được lớp vỏ `cmd.exe`.
 **Alternative:** Dùng Timeout phía Frontend (hiện tại đang bị vô hiệu hoá do Event race condition).
 **Impact:** Quyết định dời toàn bộ trách nhiệm Quản lý Vòng đời (đặc biệt là logic Force Kill) xuống Rust Backend. Loại bỏ `cmd.exe /C` nếu có thể, hoặc áp dụng `taskkill /T` trực tiếp ở Backend. Xem chi tiết tại [process_stop_investigation.md](reports/process_stop_investigation.md).
+
+
+## Decision #20
+**Date:** 2026-08-15
+**Title:** Chuẩn hóa RFC 7636 PKCE & Bóc tách Google OAuth Token Exchange Error
+**Reason:** Cải thiện độ tin cậy và khả năng chẩn đoán của luồng kết nối tài khoản AI Quota OAuth. Ngăn chặn việc ẩn giấu nguyên nhân từ chối của Google trong lỗi generic HTTP 400 và đảm bảo `code_verifier` tuân thủ 100% chuẩn mật mã RFC 7636.
+**Alternative:** Dùng chuỗi ngẫu nhiên dựa trên UUID/timestamp hoặc chỉ in mã status code HTTP.
+**Impact:** `code_verifier` được tạo bằng OS-backed cryptographic random bytes (`BCryptGenRandom` / `getrandom`) trên bảng ký tự unreserved 64 ký tự. Khi có lỗi từ chối, Google error body (`error`, `error_description`) được giải mã và hiển thị an toàn trên giao diện DCC. Xem chi tiết tại [oauth_token_exchange_pkce_hardening_report.md](reports/oauth_token_exchange_pkce_hardening_report.md).
+
+## Decision #21
+**Date:** 2026-08-16
+**Title:** Chuyển đổi OAuth Client ID sang Antigravity Native Desktop Auth Client (`88435491...apps.googleusercontent.com`)
+**Reason:** Chẩn đoán lỗi AG-9.13 từ Google token exchange xác nhận phản hồi `error='invalid_request', description='client_secret is missing.'` do Client ID trước đó (`1071006060591-...`) thuộc loại Confidential Client (Web Application proxy của Cloud Code). Client ID `884354919052-36trc1jjb3tguiac32ov6cod268c5blh.apps.googleusercontent.com` được khám phá trực tiếp từ module `[AuthProvider]` và `Keyring LoadStoredToken` của Antigravity binary là Native Desktop Public Client hỗ trợ PKCE trực tiếp không cần `client_secret`.
+**Alternative:** Giữ nguyên client cũ hoặc giả mạo bí mật (bị từ chối vì vi phạm nguyên tắc bảo mật).
+**Impact:** Client ID mặc định của DCC được chuyển sang `884354919052-36trc1jjb3tguiac32ov6cod268c5blh.apps.googleusercontent.com`.
+
+## Decision #22
+**Date:** 2026-08-16
+**Title:** Chuyển đổi Cơ chế AI Quota Monitoring sang Local Antigravity Language Server Bridge (Connect-RPC)
+**Reason:** Dựa trên kết quả khám phá runtime thực tế từ AG-9.17, Antigravity sử dụng kiến trúc local daemon (`language_server.exe`) lắng nghe trên loopback HTTPS và cung cấp Connect-RPC endpoint `/exa.language_server_pb.LanguageServerService/GetUserStatus`. Việc DCC kết nối trực tiếp đến daemon cục bộ này loại bỏ hoàn toàn sự phụ thuộc vào luồng Google OAuth bên ngoài, không cần quản lý `client_secret`, không vi phạm nguyên tắc bảo mật và đạt độ chính xác 100% về quota live, reset times, credits của 14 models.
+**Alternative:** Tiếp tục ép luồng Google OAuth phức tạp từ bên ngoài với nguy cơ bị chặn bởi chính sách Confidential Client của Google Cloud.
+**Impact:** Xây dựng module `AntigravityDiscovery` và `AntigravityQuotaClient` trong Rust Backend. Tự động phát hiện PID, listening port và `--csrf_token` an toàn từ process metadata. Toàn bộ CSRF token chỉ lưu hành nội bộ Backend.
+
+## Decision #23
+**Date:** 2026-08-16
+**Title:** Loại bỏ hoàn toàn Luồng Google OAuth khỏi Giao diện AI Quota UI & Kích hoạt Local Runtime Bridge
+**Reason:** Kiểm toán mã nguồn AG-9.19 phát hiện nút "Connect Account" / "Retry Connection" trong `QuotaAccountCard.tsx` vẫn gọi `quotaPollingService.connectGoogleAccount()`, dẫn đến việc trigger luồng OAuth bên ngoài và gây ra lỗi `client_secret is missing`. Việc loại bỏ hoàn toàn các modal và lời gọi OAuth khỏi giao diện quota, chuyển sang nút "Connect to Antigravity" / "Detect Antigravity", đảm bảo 100% các thao tác người dùng đều đi qua Local Connect-RPC Bridge.
+**Alternative:** Giữ nút OAuth song song với local bridge (gây nhầm lẫn cho người dùng và trigger lỗi Google OAuth không cần thiết).
+**Impact:** Toàn bộ AI Quota UI chuyển sang sử dụng `AntigravityLocalRuntime` làm nguồn dữ liệu duy nhất. Không còn bất kỳ request nào gửi đến `oauth2.googleapis.com` trong quá trình monitor quota.
+
+## Decision #24
+**Date:** 2026-08-16
+**Title:** Xác thực Account Identity & Đảm bảo Tính cô lập Quota Ownership trong Local Bridge
+**Reason:** Kết quả kiểm toán AG-9.22 xác định bug nghiêm trọng khi một tài khoản mới (Account B) nhận nhầm quota của tài khoản đang đăng nhập trong Antigravity (Account A) do `QuotaProviderService` trước đây không kiểm tra identity trả về từ `GetUserStatus` mà gán thẳng `account_id` yêu cầu vào snapshot và ghi đè vào cache.
+**Alternative:** Cho phép hiển thị quota của runtime hiện tại cho mọi tài khoản (gây sai lệch dữ liệu người dùng và vi phạm tính cô lập tài khoản).
+**Impact:** Chuẩn hóa so sánh identity (`runtime_email == expected_email` case-insensitive & trimmed). Bổ sung `owner_email` vào `QuotaCacheEntry`. Khi xảy ra mismatch, hệ thống tuyệt đối không gán model quota, không ghi đè cache, gán trạng thái `AuthRequired` kèm thông báo chẩn đoán rõ ràng: *"Account mismatch: Antigravity is currently authenticated as [runtime_email], but this account is [expected_email]."*
+
+## Decision #25
+**Date:** 2026-08-16
+**Title:** Kiến trúc Multi-Provider Quota Foundation (Provider Trait, Registry, Compound Cache Keys & Runtime Isolation)
+**Reason:** Chuẩn bị nền tảng mở rộng đa nhà cung cấp AI quota (Antigravity, Codex, Claude Code) theo AG-9.25 mà không gây phá vỡ cơ chế Local Runtime Bridge hiện tại, không tái diễn lỗi Google OAuth và đảm bảo tính cô lập tuyệt đối giữa các provider.
+**Alternative:** Tiếp tục gắn chặt Polling Engine với `AntigravityQuotaClient` và xử lý ad-hoc khi thêm provider mới.
+**Impact:** 
+1. Giới thiệu enum `QuotaProviderId` (`antigravity`, `codex`, `claude_code`).
+2. Trừu tượng hóa `QuotaProvider` trait độc lập với Connect-RPC, CSRF và process discovery.
+3. Thiết lập `QuotaProviderRegistry` quản lý việc phân phối runtime. `AntigravityQuotaProvider` là provider duy nhất được implement; `Codex` và `Claude Code` trả lỗi tường minh `ProviderNotImplemented` và tuyệt đối không fallback sang Antigravity.
+4. Chuyển đổi toàn bộ cache key sang compound key `format!("{}:{}", provider_id, account_id)`.
+5. Bổ sung trường `provider: Option<QuotaProviderId>` trong `AccountMonitorConfig` với cơ chế backward-compatibility tự động default về `antigravity` cho các tài khoản cũ.
+
+## Decision #26
+**Date:** 2026-08-16
+**Title:** Antigravity Auto Quota Refresh, User-Configurable Polling & In-Flight Request Deduplication
+**Reason:** Giải quyết nhu cầu tự động cập nhật AI quota theo chu kỳ định kỳ do người dùng tự cấu hình (OFF, 30s, 1m, 5m default, 10m, 15m, 30m, 60m), đồng thời ngăn chặn các request trùng lặp (in-flight race conditions) khi người dùng vừa bật auto-refresh vừa bấm "Refresh" thủ công.
+**Alternative:** Dùng `setInterval` thuần ở Frontend (gây mất đồng bộ khi đóng/mở tab, tải lại UI hoặc restart app) hoặc gọi trùng lặp Connect-RPC endpoint.
+**Impact:**
+1. Tạo module `QuotaSettingsStore` lưu trữ cấu hình `QuotaRefreshSettings` vào file `quota_refresh_settings.json` trong AppData directory, đảm bảo persistent qua các lần khởi động lại DCC.
+2. Xây dựng background timer loop trong `QuotaPollingEngine` với chu kỳ kiểm tra 1s để đáp ứng ngay lập tức khi người dùng bật/tắt hoặc đổi interval.
+3. Bổ sung `in_flight: Arc<RwLock<HashSet<String>>>` trong `QuotaPollingEngine::execute_account_refresh` để deduplicate triệt để các request trùng lặp trên cùng một account.
+4. Gửi các sự kiện IPC an toàn qua Tauri (`quota:account-updated` và `quota:engine-status-changed`).
+5. Hiển thị bảng điều khiển trực quan tại `QuotaSummary.tsx` với công tắc Bật/Tắt, dropdown chọn chu kỳ (30s -> 60m) và đồng hồ đếm ngược thời gian thực (`Next refresh in MM:SS`).
+
+## Decision #27
+**Date:** 2026-08-16
+**Title:** Tích hợp AppHandle Bootstrap & Auto-Start An toàn cho Background Quota Polling
+**Reason:** Đưa Antigravity Quota Polling Engine trở thành background service cấp ứng dụng thực thụ, hoạt động độc lập với vòng đời UI (survives React unmount, navigation, frontend reload) và đảm bảo các sự kiện Tauri (`quota:account-updated`, `quota:engine-status-changed`) được phát đi an toàn đến toàn bộ cửa sổ ứng dụng.
+**Alternative:** Dựa vào thao tác mở trang `QuotaDashboard` của người dùng để kích hoạt engine (khiến background polling bị gián đoạn nếu người dùng chỉ dùng các tính năng khác của DCC).
+**Impact:**
+1. Gắn `AppHandle` vào `QuotaPollingEngine` an toàn trong hàm `setup()` của `src-tauri/src/lib.rs`.
+2. Tự động đọc cấu hình `QuotaRefreshSettings` khi khởi động; nếu `autoRefreshEnabled == true` thì tự động khởi động background loop mà không làm block quá trình bootstrap của DCC.
+3. Mọi lỗi khởi tạo quota subsystem đều là non-fatal, được bắt gọn và không gây crash ứng dụng.
+4. Đảm bảo invariant I13: tối đa một background polling loop được phép chạy đồng thời.
+
+## Decision #28
+**Date:** 2026-08-16
+**Title:** Quota Dashboard UI Density, Shared Quota Grouping & Presentation Layer Formatting
+**Reason:** Cải thiện mật độ hiển thị (UI density) của Quota Dashboard, loại bỏ sự lặp lại của thanh tiến trình (progress bar) và thông số phần trăm khi nhiều model chia sẻ chung một quota pool (như các model Gemini hoặc Claude), đồng thời loại bỏ lỗi hiển thị số thực (floating-point artifacts như 31.607039999999998%).
+**Alternative:** Giữ nguyên hiển thị từng model độc lập (khiến account card quá dài, vượt quá 1500px chiều cao khi có 14 model).
+**Impact:**
+1. Giới thiệu `QuotaGroupViewModel` và hàm helper `groupModelsIntoQuotaPools` tại tầng presentation (không làm thay đổi data model authoritative của backend).
+2. Gom nhóm các model có cùng reset timestamp, remaining fraction và họ model vào chung 1 nhóm ("Gemini Shared Quota", "Claude Shared Quota", v.v.).
+3. Hiển thị 1 thanh progress bar và 1 giá trị phần trăm duy nhất cho mỗi nhóm quota chia sẻ, mặc định thu gọn (collapsed by default) với nút mở rộng xem danh sách model con.
+4. Thêm vùng cuộn nội bộ (`max-h-[340px] overflow-y-auto`) trong account card, giúp kích thước card luôn gọn gàng và ổn định.
+5. Cập nhật `QuotaSummary.tsx` hiển thị tổng số quota group và tổng số model đang được giám sát trên toàn hệ thống.
+
+## Decision #29
+**Date:** 2026-08-16
+**Title:** Persistent Account Connection Intent & Automatic Runtime Reconnect on Application Startup (AG-9.29)
+**Reason:** Khắc phục vấn đề tài khoản Antigravity bị mất trạng thái "Connected" sau khi đóng và mở lại DCC, buộc người dùng phải bấm "Connect Antigravity" thủ công mỗi lần khởi động lại ứng dụng.
+**Alternative:** Lưu trữ trạng thái runtime kết nối (`is_connected: bool`) hoặc volatile tokens (CSRF, PID, Port) vào đĩa (gây rủi ro bảo mật nghiêm trọng và gây lỗi nếu Antigravity restart với PID/Port/CSRF mới).
+**Impact:**
+1. **Connection Intent Persistence:** Bổ sung trường cấu hình bền vững `auto_connect: bool` vào `AccountMonitorConfig` và `AccountQuotaSnapshot` với `#[serde(default = "default_true")]`, đảm bảo tương thích 100% ngược (backward compatibility) với các tài khoản cũ.
+2. **Security Guarantee:** Tuyệt đối không lưu trữ hay tái sử dụng các dữ liệu tạm thời/nhạy cảm (PID, Port, CSRF token, session token). Quá trình kết nối lại luôn khám phá động runtime và xác thực identity (`runtime_email == expected_email`).
+3. **Startup Reconnect Pass:** Tại Tauri `setup()`, ngay khi `AppHandle` được gắn vào `QuotaPollingEngine`, hệ thống thực hiện ngay một lượt đồng bộ khởi động (`reconnect_startup_accounts`) cho tất cả các tài khoản đang enabled và có `auto_connect == true`, bất kể chế độ auto-refresh định kỳ đang BẬT hay TẮT.
+4. **Fail-Closed Identity Protection:** Trường hợp tài khoản trên Antigravity không khớp (mismatch email), hệ thống chuyển sang trạng thái `AuthRequired`, trả về 0 live models, không làm ô nhiễm cache và không bao giờ hiển thị sai quyền sở hữu quota.
+5. **UI & User Control:** Bổ sung tùy chọn toggle *"Auto-connect on startup"* trong menu tác vụ của Account Card và tích hợp vào modal thêm tài khoản mới.
+6. **Atomic Persistence:** Ghi file cấu hình tài khoản theo cơ chế atomic write (ghi file tạm `.tmp` rồi replace file chính) ngăn ngừa rủi ro file JSON bị hỏng khi tắt ứng dụng đột ngột.

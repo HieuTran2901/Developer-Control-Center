@@ -57,3 +57,7 @@ import { SecurityHistoryRepository } from '../repositories/SecurityHistoryReposi
 export const securityHistoryRepository = new SecurityHistoryRepository(tauriDesktopGateway);
 
 export * from './AIProviderService';
+export * from './QuotaDiscoveryService';
+export * from './QuotaProviderService';
+export * from './QuotaPollingService';
+

@@ -41,3 +41,7 @@ API key
 target/
 *.jar
 *.war
+
+# DCC local data
+.dcc/
+

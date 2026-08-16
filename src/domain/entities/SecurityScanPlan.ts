@@ -17,6 +17,7 @@ export interface SecurityScanPlan {
   projectId: string;
   projectName: string;
   projectRoot: string;
+  architectureType?: string;
   mode: SecurityScanMode;
   languages: string[];
   frameworks: string[];

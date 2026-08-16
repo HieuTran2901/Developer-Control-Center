@@ -36,14 +36,54 @@ pub enum SecurityCategory {
     FileExposure,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SecurityScanStatus {
+    #[default]
     Idle,
     Scanning,
     Completed,
     Failed,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ScannerExecutionState {
+    Executed,
+    NotIncluded,
+    Unavailable,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScannerExecutionDetail {
+    pub scanner_id: String,
+    pub scanner_name: String,
+    pub category: String,
+    pub state: ScannerExecutionState,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityScanExecutionSummary {
+    pub scan_id: String,
+    pub mode: SecurityScanMode,
+    pub project_id: String,
+    pub project_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planned_capabilities: Option<crate::security::scan_planner::SecurityCapabilities>,
+    pub executed_scanners: Vec<String>,
+    pub skipped_scanners: Vec<String>,
+    pub scanner_details: Vec<ScannerExecutionDetail>,
+    pub git_checked: bool,
+    pub files_examined: usize,
+    pub findings_count: usize,
+    pub duration_ms: u64,
+    pub status: SecurityScanStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,7 +126,7 @@ pub struct SecurityFinding {
     pub metadata: Option<FindingMetadata>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SecurityScanSummary {
     pub total_findings: usize,
@@ -96,6 +136,8 @@ pub struct SecurityScanSummary {
     pub low: usize,
     pub info: usize,
     pub scan_duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_summary: Option<SecurityScanExecutionSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

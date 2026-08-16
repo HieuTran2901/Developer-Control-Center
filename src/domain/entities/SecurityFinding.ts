@@ -41,6 +41,37 @@ export interface SecurityFinding {
   metadata?: FindingMetadata;
 }
 
+export type ScannerExecutionState = 'EXECUTED' | 'NOT_INCLUDED' | 'UNAVAILABLE' | 'CANCELLED' | 'FAILED';
+
+export interface ScannerExecutionDetail {
+  scannerId: string;
+  scannerName: string;
+  category: string;
+  state: ScannerExecutionState;
+  reason?: string;
+}
+
+export interface SecurityScanExecutionSummary {
+  scanId: string;
+  mode: SecurityScanMode;
+  projectId: string;
+  projectName: string;
+  plannedCapabilities?: {
+    secrets: boolean;
+    configuration: boolean;
+    dependencies: boolean;
+    gitExposure: boolean;
+  };
+  executedScanners: string[];
+  skippedScanners: string[];
+  scannerDetails: ScannerExecutionDetail[];
+  gitChecked: boolean;
+  filesExamined: number;
+  findingsCount: number;
+  durationMs: number;
+  status: SecurityScanStatus;
+}
+
 export interface SecurityScanSummary {
   totalFindings: number;
   critical: number;
@@ -49,6 +80,7 @@ export interface SecurityScanSummary {
   low: number;
   info: number;
   scanDurationMs: number;
+  executionSummary?: SecurityScanExecutionSummary;
 }
 
 export type SecurityScanEventPayload = 

@@ -11,6 +11,7 @@ const navItems: { icon: IconName; label: string; path: string }[] = [
   { icon: 'List', label: 'Logs', path: '/logs' },
   { icon: 'Shield', label: 'Security', path: '/security' },
   { icon: 'Workflow', label: 'CI/CD', path: '/cicd' },
+  { icon: 'Sparkles', label: 'AI Quota', path: '/ai-quota' },
   { icon: 'Settings', label: 'Settings', path: '/settings' },
   { icon: 'Info', label: 'About', path: '/about' },
 ];
