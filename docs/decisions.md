@@ -265,5 +265,38 @@
 2. **Storm-Free Pre-Scheduling:** Ngay khi một chu kỳ batch được kích hoạt, deadline `snap.next_refresh_at` của tất cả các tài khoản hợp lệ được tạm thời tịnh tiến về tương lai (`now_ts + interval_seconds`) trong cache `snapshots`, ngăn chặn triệt để hiện tượng vòng lặp 1 giây bị kích hoạt liên tục (polling storm) khi các tác vụ đang chờ permit.
 3. **Dynamic Snapshot Deadline Synchronization:** Khi hàm `update_refresh_settings()` được gọi, hệ thống cập nhật đồng thời cả `next_global_refresh` lẫn toàn bộ `snap.next_refresh_at` của các snapshot trong bộ nhớ, đảm bảo nhịp đếm lùi trên UI và điều kiện kích hoạt backend luôn đồng bộ 100%.
 
+## Decision #33
+**Date:** 2026-08-16
+**Title:** Canonical Account Ordering & Stable Identity Contract Across Presentation Boundaries (AG-9.34)
+**Reason:** Khắc phục hiện tượng vị trí thẻ tài khoản bị xáo trộn giữa các lần khởi động DCC do thứ tự duyệt `HashMap` ngẫu nhiên trong Rust, hiện tượng nhầm lẫn account trong công cụ chẩn đoán do sử dụng `snapshots[0]`, và hiện tượng xáo trộn các nhóm quota tile do thứ tự trả về từ RPC.
+**Alternative:** Dùng mảng cố định không phân tầng hoặc khóa vị trí trên localStorage (dễ lỗi thời, không giải quyết được nguồn dữ liệu backend).
+**Impact:**
+1. **Backend Canonical Ordering (`createdAt ASC -> accountId ASC`):** `AccountRegistry::list()` và `save_internal()` luôn sắp xếp danh sách tài khoản theo thứ tự tạo tăng dần, lấy `account_id` làm tiêu chí phụ. File `account_registry.json` duy trì thứ tự cố định và nhất quán trên đĩa.
+2. **Frontend Invariant Snapshot Merging (`sortSnapshots`):** `QuotaDashboard.tsx` chuẩn hóa toàn bộ danh sách `snapshots` qua hàm `sortSnapshots()`, bảo đảm mọi sự kiện cập nhật bất đồng bộ (`quota:account-updated`) và các chu kỳ refresh đều giữ nguyên vị trí thẻ trên UI.
+3. **Explicit Diagnostic & Modal Targeting:** Xóa bỏ hoàn toàn fallback nguy hiểm `snapshots[0]?.accountId`; thay vào đó sử dụng target ID tường minh kèm bộ chọn tài khoản (account selector) khi có nhiều tài khoản.
+4. **Deterministic Quota Group & Model Hierarchy:** `groupModelsIntoQuotaPools()` sắp xếp các nhóm quota theo cấp bậc họ mô hình chuẩn (`Gemini -> Claude -> GPT -> DeepSeek -> Other`), đồng thời sắp xếp tên các model con theo thứ tự ABC.
+
+## Decision #34
+**Date:** 2026-08-16
+**Title:** Quota Subsystem Integration Polish & Runtime State Synchronization (AG-9.36)
+**Reason:** Nâng cao tính nhất quán trạng thái UI và trải nghiệm thời gian thực khi thực hiện Refresh All và quản lý vòng đời tài khoản quota.
+**Alternative:** Giữ trạng thái tải độc lập cho từng thẻ hoặc bỏ qua loading state của từng thẻ khi làm mới toàn bộ.
+**Impact:**
+1. **Synchronized Refresh Indicator:** Khi người dùng bấm "Refresh All", thuộc tính `isRefreshing` của tất cả các `QuotaAccountCard` được kích hoạt đồng bộ (`refreshingAccountId === snap.accountId || isRefreshingAll`), cung cấp phản hồi trực quan tức thì trên toàn bộ giao diện dashboard.
+2. **End-to-End State Machine Hardening:** Bảo toàn tuyệt đối các bất biến định danh từ AG-9.28 đến AG-9.35 (Identity isolation, fail-closed mismatch, dual window 5h+weekly, auto-refresh bounded concurrency).
+
+## Decision #35
+**Date:** 2026-08-16
+**Title:** Account Removal Invariant & Late Event Resurrection Protection (AG-9.40)
+**Reason:** Ngăn chặn triệt để hiện tượng tài khoản đã bị xóa bị tái xuất hiện (resurrect) trên giao diện do sự kiện `quota:account-updated` đến muộn từ một tác vụ làm mới ngầm đang chạy dở (in-flight), và đảm bảo bộ chọn chẩn đoán (diagnostics selector) không lưu giữ ID của tài khoản đã xóa.
+**Alternative:** Cho phép sự kiện tự do append vào mảng snapshot và chờ đợt tải lại trang để tự sửa lỗi (gây giật lag giao diện và rủi ro hiển thị dữ liệu mồ côi).
+**Impact:**
+1. **Frontend Registered Account Gate:** Trong `onAccountUpdated`, nếu `accountId` không tồn tại trong danh sách snapshot hiện hành (`index < 0`), sự kiện sẽ bị bỏ qua (`return prev;`) thay vì tự động append.
+2. **Backend Registry Verification Gate:** Trong `execute_account_refresh`, sau khi tác vụ hoàn thành và giải phóng cờ `in_flight`, hệ thống kiểm tra `registry.get(&acc.account_id).await.is_none()`. Nếu tài khoản đã bị xóa khỏi registry, snapshot sẽ không được ghi đè vào cache `snapshots` và sự kiện `quota:account-updated` sẽ không được phát ra.
+3. **Diagnostic Target Invalidation:** Trong `handleRemoveAccount`, nếu tài khoản đang được chọn trong bảng chẩn đoán bị xóa, trạng thái `selectedDiagnosticAccountId` và `verificationResult` sẽ lập tức được làm rỗng.
+
+
+
+
 
 

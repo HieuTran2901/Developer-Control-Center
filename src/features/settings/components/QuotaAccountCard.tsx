@@ -843,9 +843,31 @@ export function groupModelsIntoQuotaPools(models: ModelQuota[]): QuotaGroupViewM
     groupsMap.get(groupKey)!.push(model);
   }
 
+  const getFamilyRank = (fam: string): number => {
+    switch (fam) {
+      case 'gemini':
+        return 1;
+      case 'claude':
+        return 2;
+      case 'gpt':
+        return 3;
+      case 'deepseek':
+        return 4;
+      default:
+        return 5;
+    }
+  };
+
   const result: QuotaGroupViewModel[] = [];
 
   for (const [key, groupModels] of groupsMap.entries()) {
+    // Sort models deterministically inside each group by display name / modelId
+    groupModels.sort((a, b) => {
+      const nameA = a.displayName || a.modelId;
+      const nameB = b.displayName || b.modelId;
+      return nameA.localeCompare(nameB);
+    });
+
     const isShared = groupModels.length > 1;
     const first = groupModels[0];
 
@@ -873,6 +895,16 @@ export function groupModelsIntoQuotaPools(models: ModelQuota[]): QuotaGroupViewM
       models: groupModels,
     });
   }
+
+  // Sort groups deterministically: Gemini -> Claude -> GPT -> DeepSeek -> Other -> Alphabetical
+  result.sort((a, b) => {
+    const famA = a.id.split('::')[0];
+    const famB = b.id.split('::')[0];
+    const rankA = getFamilyRank(famA);
+    const rankB = getFamilyRank(famB);
+    if (rankA !== rankB) return rankA - rankB;
+    return a.groupName.localeCompare(b.groupName);
+  });
 
   return result;
 }

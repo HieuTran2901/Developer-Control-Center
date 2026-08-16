@@ -14,6 +14,10 @@ import { QuotaAccountCard, groupModelsIntoQuotaPools } from './QuotaAccountCard'
 import { AddAccountModal } from './AddAccountModal';
 
 
+export function sortSnapshots(snapshots: AccountQuotaSnapshot[]): AccountQuotaSnapshot[] {
+  return [...snapshots].sort((a, b) => a.accountId.localeCompare(b.accountId));
+}
+
 export function QuotaDashboard() {
   const [snapshots, setSnapshots] = useState<AccountQuotaSnapshot[]>([]);
   const [pollingStatus, setPollingStatus] = useState<PollingEngineStatus | null>(null);
@@ -25,6 +29,7 @@ export function QuotaDashboard() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [verificationResult, setVerificationResult] = useState<QuotaVerificationDiagnostic | null>(null);
+  const [selectedDiagnosticAccountId, setSelectedDiagnosticAccountId] = useState<string>('');
 
   // Load initial data
   const loadDashboardData = useCallback(async () => {
@@ -35,13 +40,13 @@ export function QuotaDashboard() {
         quotaPollingService.getPollingStatus(),
       ]);
 
-      setSnapshots(states);
+      setSnapshots(sortSnapshots(states));
       setPollingStatus(status);
 
       // If snapshots empty, query registry list and refresh
       if (states.length === 0) {
         const initialSnapshots = await quotaPollingService.refreshAll();
-        setSnapshots(initialSnapshots);
+        setSnapshots(sortSnapshots(initialSnapshots));
         const updatedStatus = await quotaPollingService.getPollingStatus();
         setPollingStatus(updatedStatus);
       }
@@ -60,13 +65,13 @@ export function QuotaDashboard() {
     const unsubscribeAccountUpdated = quotaPollingService.onAccountUpdated((updatedSnap) => {
       setSnapshots((prev) => {
         const index = prev.findIndex((s) => s.accountId === updatedSnap.accountId);
-        if (index >= 0) {
-          const next = [...prev];
-          next[index] = updatedSnap;
-          return next;
-        } else {
-          return [...prev, updatedSnap];
+        if (index < 0) {
+          // Account is no longer registered in active state (e.g. was removed). Ignore stale late event.
+          return prev;
         }
+        const next = [...prev];
+        next[index] = updatedSnap;
+        return sortSnapshots(next);
       });
     });
 
@@ -102,7 +107,7 @@ export function QuotaDashboard() {
     setError(null);
     try {
       const refreshed = await quotaPollingService.refreshAll();
-      setSnapshots(refreshed);
+      setSnapshots(sortSnapshots(refreshed));
       const status = await quotaPollingService.getPollingStatus();
       setPollingStatus(status);
     } catch (e: any) {
@@ -120,13 +125,14 @@ export function QuotaDashboard() {
       const updated = await quotaPollingService.refreshAccount(accountId);
       setSnapshots((prev) => {
         const index = prev.findIndex((s) => s.accountId === updated.accountId);
+        let next: AccountQuotaSnapshot[];
         if (index >= 0) {
-          const next = [...prev];
+          next = [...prev];
           next[index] = updated;
-          return next;
         } else {
-          return [...prev, updated];
+          next = [...prev, updated];
         }
+        return sortSnapshots(next);
       });
     } catch (e: any) {
       console.error(`Failed to refresh account ${accountId}:`, e);
@@ -158,7 +164,7 @@ export function QuotaDashboard() {
       setIsAddModalOpen(false);
       // Immediately reload all account states from backend
       const updatedStates = await quotaPollingService.getAllStates();
-      setSnapshots(updatedStates);
+      setSnapshots(sortSnapshots(updatedStates));
       const status = await quotaPollingService.getPollingStatus();
       setPollingStatus(status);
       // Trigger refresh on the newly registered account
@@ -221,6 +227,10 @@ export function QuotaDashboard() {
     try {
       await quotaPollingService.removeAccount(accountId);
       setSnapshots((prev) => prev.filter((s) => s.accountId !== accountId));
+      if (selectedDiagnosticAccountId === accountId) {
+        setSelectedDiagnosticAccountId('');
+        setVerificationResult(null);
+      }
       const status = await quotaPollingService.getPollingStatus();
       setPollingStatus(status);
     } catch (e: any) {
@@ -233,7 +243,16 @@ export function QuotaDashboard() {
     setIsVerifying(true);
     setVerificationResult(null);
     try {
-      const targetId = accountId || snapshots[0]?.accountId || 'primary';
+      const targetId =
+        accountId ||
+        selectedDiagnosticAccountId ||
+        (snapshots.length > 0 ? snapshots[0].accountId : null);
+
+      if (!targetId) {
+        setError('No registered account available to verify.');
+        return;
+      }
+
       const result = await quotaProviderService.verifyQuotaPath(targetId);
       setVerificationResult(result);
     } catch (e: any) {
@@ -354,7 +373,7 @@ export function QuotaDashboard() {
                 onToggleAutoConnect={handleToggleAutoConnect}
                 onRename={handleRenameAccount}
                 onRemove={handleRemoveAccount}
-                isRefreshing={refreshingAccountId === snap.accountId}
+                isRefreshing={refreshingAccountId === snap.accountId || isRefreshingAll}
               />
             ))}
           </div>
@@ -424,23 +443,38 @@ export function QuotaDashboard() {
               </div>
             </div>
 
-            <div className="pt-2 border-t border-border/50 flex items-center justify-between">
+            <div className="pt-2 border-t border-border/50 flex items-center justify-between gap-3">
               <div>
                 <p className="text-[11px] text-foreground font-medium">Real Quota Path Verification</p>
                 <p className="text-[10px] text-muted-foreground">
                   Executes the authenticated provider verification path and inspects data provenance.
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleVerifyProviderPath()}
-                disabled={isVerifying}
-                className="h-7 text-xs px-2.5 gap-1.5"
-              >
-                {isVerifying && <Icon name="Loader2" className="w-3 h-3 animate-spin" />}
-                <span>Verify Provider Path</span>
-              </Button>
+              <div className="flex items-center gap-2">
+                {snapshots.length > 1 && (
+                  <select
+                    value={selectedDiagnosticAccountId || snapshots[0]?.accountId || ''}
+                    onChange={(e) => setSelectedDiagnosticAccountId(e.target.value)}
+                    className="h-7 text-xs px-2 py-0 rounded border border-border bg-surface text-foreground font-sans"
+                  >
+                    {snapshots.map((s) => (
+                      <option key={s.accountId} value={s.accountId}>
+                        {s.displayName || s.email}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleVerifyProviderPath()}
+                  disabled={isVerifying || snapshots.length === 0}
+                  className="h-7 text-xs px-2.5 gap-1.5"
+                >
+                  {isVerifying && <Icon name="Loader2" className="w-3 h-3 animate-spin" />}
+                  <span>Verify Provider Path</span>
+                </Button>
+              </div>
             </div>
 
             {verificationResult && (

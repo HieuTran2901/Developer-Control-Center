@@ -240,7 +240,13 @@ impl AccountRegistry {
 
     pub async fn list(&self) -> Vec<AccountMonitorConfig> {
         let map = self.accounts.read().await;
-        map.values().cloned().collect()
+        let mut list: Vec<AccountMonitorConfig> = map.values().cloned().collect();
+        list.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.account_id.cmp(&b.account_id))
+        });
+        list
     }
 
     pub async fn get(&self, account_id: &str) -> Option<AccountMonitorConfig> {
@@ -265,8 +271,30 @@ impl AccountRegistry {
         Ok(())
     }
 
+    pub async fn update(&self, config: AccountMonitorConfig) -> Result<(), String> {
+        config.validate()?;
+        let mut map = self.accounts.write().await;
+        
+        if !map.contains_key(&config.account_id) {
+            return Err(format!("Account with ID '{}' not found.", config.account_id));
+        }
+
+        // Email uniqueness check (excluding self)
+        if map.values().any(|a| a.account_id != config.account_id && a.email.eq_ignore_ascii_case(&config.email)) {
+            return Err(format!("Another account with email '{}' already exists.", config.email));
+        }
+
+        map.insert(config.account_id.clone(), config);
+        self.save_internal(&map);
+        Ok(())
+    }
+
     pub async fn remove(&self, account_id: &str) -> Result<bool, String> {
         let mut map = self.accounts.write().await;
+        if map.len() <= 1 {
+            return Err("Cannot remove the only registered account.".to_string());
+        }
+
         let removed = map.remove(account_id).is_some();
         if removed {
             self.save_internal(&map);
@@ -315,7 +343,12 @@ impl AccountRegistry {
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
-            let list: Vec<&AccountMonitorConfig> = map.values().collect();
+            let mut list: Vec<&AccountMonitorConfig> = map.values().collect();
+            list.sort_by(|a, b| {
+                a.created_at
+                    .cmp(&b.created_at)
+                    .then_with(|| a.account_id.cmp(&b.account_id))
+            });
             if let Ok(data) = serde_json::to_string_pretty(&list) {
                 let temp_path = path.with_extension("tmp");
                 if fs::write(&temp_path, data).is_ok() {
@@ -518,6 +551,7 @@ impl QuotaPollingEngine {
                         let sem = semaphore.clone();
                         let acc_clone = acc.clone();
                         let snapshots_clone = snapshots.clone();
+                        let registry_clone = registry.clone();
                         let provider_clone = provider.clone();
                         let app_handle_clone = app_handle.clone();
                         let in_flight_clone = in_flight.clone();
@@ -528,6 +562,7 @@ impl QuotaPollingEngine {
                                 Self::execute_account_refresh(
                                     &acc_clone,
                                     snapshots_clone,
+                                    registry_clone,
                                     provider_clone,
                                     app_handle_clone,
                                     in_flight_clone,
@@ -602,6 +637,7 @@ impl QuotaPollingEngine {
         let snapshot = Self::execute_account_refresh(
             &acc,
             self.snapshots.clone(),
+            self.registry.clone(),
             self.provider.clone(),
             self.app_handle.clone(),
             self.in_flight.clone(),
@@ -698,9 +734,8 @@ impl QuotaPollingEngine {
                     let _ = handle.emit("quota:engine-status-changed", ());
                 }
 
-                match self.refresh_account_now(&acc.account_id).await {
-                    Ok(snap) => results.push(snap),
-                    Err(e) => eprintln!("[QuotaEngine] Startup reconnect failed for {}: {}", acc.account_id, e),
+                if let Ok(snap) = self.refresh_account_now(&acc.account_id).await {
+                    results.push(snap);
                 }
             }
         }
@@ -803,6 +838,7 @@ impl QuotaPollingEngine {
     async fn execute_account_refresh(
         acc: &AccountMonitorConfig,
         snapshots: Arc<RwLock<HashMap<String, AccountQuotaSnapshot>>>,
+        registry: Arc<AccountRegistry>,
         provider: Arc<QuotaProviderService>,
         app_handle: Arc<RwLock<Option<AppHandle>>>,
         in_flight: Arc<RwLock<HashSet<String>>>,
@@ -986,16 +1022,21 @@ impl QuotaPollingEngine {
             }
         };
 
+        // Cleanup in-flight marker first to ensure no resource lock is leaked
+        {
+            let mut in_flight_set = in_flight.write().await;
+            in_flight_set.remove(&account_id);
+        }
+
+        // Verify account is still registered before updating cache or emitting event
+        if registry.get(&acc.account_id).await.is_none() {
+            return snapshot;
+        }
+
         // Update in-memory snapshots cache
         {
             let mut snaps = snapshots.write().await;
             snaps.insert(acc.account_id.clone(), snapshot.clone());
-        }
-
-        // Cleanup in-flight marker
-        {
-            let mut in_flight_set = in_flight.write().await;
-            in_flight_set.remove(&account_id);
         }
 
         // Emit safe Tauri event
@@ -1497,6 +1538,138 @@ mod tests {
         let count = completed.lock().await.len();
         assert_eq!(count, 5, "All 5 accounts must acquire permit and complete without being dropped");
     }
+
+    #[tokio::test]
+    async fn test_account_registry_list_is_deterministic_across_instances() {
+        let registry = AccountRegistry::new(None);
+        
+        let acc_b = AccountMonitorConfig {
+            account_id: "acc-b".to_string(),
+            provider: Some(QuotaProviderId::Antigravity),
+            email: "b@example.com".to_string(),
+            display_name: Some("Account B".to_string()),
+            tier: None,
+            enabled: true,
+            auto_connect: true,
+            polling_interval_seconds: 120,
+            created_at: "1723720000".to_string(), // later timestamp
+            updated_at: "1723720000".to_string(),
+        };
+
+        let acc_a = AccountMonitorConfig {
+            account_id: "acc-a".to_string(),
+            provider: Some(QuotaProviderId::Antigravity),
+            email: "a@example.com".to_string(),
+            display_name: Some("Account A".to_string()),
+            tier: None,
+            enabled: true,
+            auto_connect: true,
+            polling_interval_seconds: 120,
+            created_at: "1723710000".to_string(), // earlier timestamp
+            updated_at: "1723710000".to_string(),
+        };
+
+        registry.register(acc_b).await.unwrap();
+        registry.register(acc_a).await.unwrap();
+
+        let list = registry.list().await;
+        // Verify deterministic sorting: created_at ASC then account_id ASC
+        // acc-a has earlier created_at than acc-b, so acc-a must precede acc-b
+        let pos_a = list.iter().position(|x| x.account_id == "acc-a").unwrap();
+        let pos_b = list.iter().position(|x| x.account_id == "acc-b").unwrap();
+        assert!(pos_a < pos_b, "Earlier created_at must precede later created_at in list()");
+    }
+
+    #[tokio::test]
+    async fn test_get_all_states_preserves_deterministic_order() {
+        let storage = Arc::new(MockCredentialStorage::new());
+        let provider = Arc::new(QuotaProviderService::new(storage));
+        let registry = Arc::new(AccountRegistry::new(None));
+
+        let acc_2 = AccountMonitorConfig {
+            account_id: "acc-2".to_string(),
+            provider: Some(QuotaProviderId::Antigravity),
+            email: "user2@example.com".to_string(),
+            display_name: Some("User 2".to_string()),
+            tier: None,
+            enabled: true,
+            auto_connect: true,
+            polling_interval_seconds: 120,
+            created_at: "1723730000".to_string(),
+            updated_at: "1723730000".to_string(),
+        };
+
+        let acc_1 = AccountMonitorConfig {
+            account_id: "acc-1".to_string(),
+            provider: Some(QuotaProviderId::Antigravity),
+            email: "user1@example.com".to_string(),
+            display_name: Some("User 1".to_string()),
+            tier: None,
+            enabled: true,
+            auto_connect: true,
+            polling_interval_seconds: 120,
+            created_at: "1723710000".to_string(),
+            updated_at: "1723710000".to_string(),
+        };
+
+        registry.register(acc_2).await.unwrap();
+        registry.register(acc_1).await.unwrap();
+
+        let engine = QuotaPollingEngine::new(registry, provider, None);
+        let states = engine.get_all_states().await;
+
+        let pos_1 = states.iter().position(|x| x.account_id == "acc-1").unwrap();
+        let pos_2 = states.iter().position(|x| x.account_id == "acc-2").unwrap();
+        assert!(pos_1 < pos_2, "get_all_states must return accounts in deterministic created_at ASC order");
+    }
+
+    #[tokio::test]
+    async fn test_save_internal_preserves_deterministic_disk_order() {
+        let temp_dir = std::env::temp_dir().join(format!("dcc_test_{}", current_unix_timestamp()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let file_path = temp_dir.join("account_registry.json");
+
+        let registry = AccountRegistry::new(Some(&temp_dir));
+
+        let acc_z = AccountMonitorConfig {
+            account_id: "acc-z".to_string(),
+            provider: Some(QuotaProviderId::Antigravity),
+            email: "z@example.com".to_string(),
+            display_name: Some("Account Z".to_string()),
+            tier: None,
+            enabled: true,
+            auto_connect: true,
+            polling_interval_seconds: 120,
+            created_at: "1723750000".to_string(),
+            updated_at: "1723750000".to_string(),
+        };
+
+        let acc_a = AccountMonitorConfig {
+            account_id: "acc-a".to_string(),
+            provider: Some(QuotaProviderId::Antigravity),
+            email: "a@example.com".to_string(),
+            display_name: Some("Account A".to_string()),
+            tier: None,
+            enabled: true,
+            auto_connect: true,
+            polling_interval_seconds: 120,
+            created_at: "1723710000".to_string(),
+            updated_at: "1723710000".to_string(),
+        };
+
+        registry.register(acc_z).await.unwrap();
+        registry.register(acc_a).await.unwrap();
+
+        let data = fs::read_to_string(&file_path).expect("read file_path");
+        let parsed: Vec<AccountMonitorConfig> = serde_json::from_str(&data).expect("parse json");
+
+        let pos_a = parsed.iter().position(|x| x.account_id == "acc-a").unwrap();
+        let pos_z = parsed.iter().position(|x| x.account_id == "acc-z").unwrap();
+        assert!(pos_a < pos_z, "Serialized json must store accounts sorted deterministically");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
+
 
 
