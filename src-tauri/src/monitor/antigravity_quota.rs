@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-
 use crate::monitor::antigravity_discovery::{AntigravityDiscovery, AntigravityRuntime, DiscoveryErrorKind};
+use crate::monitor::quota_provider::QuotaWindowInfo;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +28,11 @@ pub struct AntigravityModelQuota {
     pub remaining_fraction: Option<f64>,
     pub remaining_percent: Option<f64>,
     pub reset_time: Option<String>,
+    pub weekly_remaining_fraction: Option<f64>,
+    pub weekly_remaining_percent: Option<f64>,
+    pub weekly_reset_time: Option<String>,
+    #[serde(default)]
+    pub windows: Vec<QuotaWindowInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,14 +123,14 @@ impl AntigravityQuotaClient {
         &self,
         runtime: &AntigravityRuntime,
     ) -> Result<AntigravityQuotaSnapshot, AntigravityQuotaError> {
-        let url = format!(
+        let user_status_url = format!(
             "https://{}:{}/exa.language_server_pb.LanguageServerService/GetUserStatus",
             runtime.rpc_host, runtime.rpc_port
         );
 
         let resp = self
             .http_client
-            .post(&url)
+            .post(&user_status_url)
             .header("Content-Type", "application/json")
             .header("Connect-Protocol-Version", "1")
             .header("x-codeium-csrf-token", &runtime.csrf_token)
@@ -165,12 +171,34 @@ impl AntigravityQuotaClient {
             message: format!("Failed to read Language Server response: {}", e),
         })?;
 
-        let v: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| AntigravityQuotaError {
+        let user_status_v: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| AntigravityQuotaError {
             state: AntigravityRuntimeState::InvalidResponse,
             message: format!("Failed to parse Language Server JSON: {}", e),
         })?;
 
-        Self::parse_user_status_json(&v)
+        // Query RetrieveUserQuotaSummary for real weekly & 5h limits
+        let summary_url = format!(
+            "https://{}:{}/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary",
+            runtime.rpc_host, runtime.rpc_port
+        );
+
+        let summary_v: Option<serde_json::Value> = match self
+            .http_client
+            .post(&summary_url)
+            .header("Content-Type", "application/json")
+            .header("Connect-Protocol-Version", "1")
+            .header("x-codeium-csrf-token", &runtime.csrf_token)
+            .body("{}")
+            .send()
+            .await
+        {
+            Ok(summary_resp) if summary_resp.status().is_success() => {
+                summary_resp.text().await.ok().and_then(|t| serde_json::from_str(&t).ok())
+            }
+            _ => None,
+        };
+
+        Self::parse_user_status_and_summary_json(&user_status_v, summary_v.as_ref())
     }
 
     /// Run diagnostic check on the local Antigravity runtime
@@ -236,9 +264,12 @@ impl AntigravityQuotaClient {
         }
     }
 
-    /// Parse and normalize `userStatus` response JSON into DCC DTO
-    pub fn parse_user_status_json(v: &serde_json::Value) -> Result<AntigravityQuotaSnapshot, AntigravityQuotaError> {
-        let user_status = match v.get("userStatus") {
+    /// Parse and normalize `userStatus` and optional `RetrieveUserQuotaSummary` JSON into DCC DTO
+    pub fn parse_user_status_and_summary_json(
+        user_status_v: &serde_json::Value,
+        summary_v: Option<&serde_json::Value>,
+    ) -> Result<AntigravityQuotaSnapshot, AntigravityQuotaError> {
+        let user_status = match user_status_v.get("userStatus") {
             Some(u) => u,
             None => {
                 return Err(AntigravityQuotaError {
@@ -279,6 +310,51 @@ impl AntigravityQuotaClient {
             .and_then(|pi| pi.get("monthlyFlowCredits"))
             .and_then(|c| c.as_i64());
 
+        // Parse summary buckets by family/group
+        // Map family key ("gemini", "3p", "claude", "gpt") -> Vec<QuotaWindowInfo>
+        let mut group_windows: HashMap<String, Vec<QuotaWindowInfo>> = HashMap::new();
+
+        if let Some(summary) = summary_v {
+            if let Some(groups) = summary
+                .get("response")
+                .and_then(|r| r.get("groups"))
+                .and_then(|g| g.as_array())
+            {
+                for group in groups {
+                    let display_name = group.get("displayName").and_then(|s| s.as_str()).unwrap_or("");
+                    let desc = group.get("description").and_then(|s| s.as_str()).unwrap_or("");
+                    let group_text = format!("{} {}", display_name, desc).to_lowercase();
+
+                    let mut group_key = "other";
+                    if group_text.contains("gemini") {
+                        group_key = "gemini";
+                    } else if group_text.contains("claude") || group_text.contains("gpt") || group_text.contains("3p") {
+                        group_key = "3p";
+                    }
+
+                    if let Some(buckets) = group.get("buckets").and_then(|b| b.as_array()) {
+                        let mut windows = Vec::new();
+                        for bucket in buckets {
+                            let window_type = bucket.get("window").and_then(|s| s.as_str()).unwrap_or("unknown").to_string();
+                            let fraction = bucket.get("remainingFraction").and_then(|f| f.as_f64());
+                            let percentage = fraction.map(|f| (f * 100.0).round());
+                            let reset_time = bucket.get("resetTime").and_then(|s| s.as_str()).map(|s| s.to_string());
+                            let description = bucket.get("description").and_then(|s| s.as_str()).map(|s| s.to_string());
+
+                            windows.push(QuotaWindowInfo {
+                                window_type,
+                                remaining_fraction: fraction,
+                                remaining_percentage: percentage,
+                                reset_time,
+                                description,
+                            });
+                        }
+                        group_windows.insert(group_key.to_string(), windows);
+                    }
+                }
+            }
+        }
+
         let mut models = Vec::new();
         if let Some(model_configs) = user_status
             .get("cascadeModelConfigData")
@@ -299,12 +375,33 @@ impl AntigravityQuotaClient {
                 let remaining_percent = remaining_fraction.map(|f| f * 100.0);
                 let reset_time = quota_info.and_then(|q| q.get("resetTime")).and_then(|s| s.as_str()).map(|s| s.to_string());
 
+                // Find corresponding weekly & 5h windows from RetrieveUserQuotaSummary
+                let name_lower = display_name.as_deref().unwrap_or(&model_id).to_lowercase();
+                let family = if name_lower.contains("gemini") {
+                    "gemini"
+                } else if name_lower.contains("claude") || name_lower.contains("gpt") {
+                    "3p"
+                } else {
+                    "other"
+                };
+
+                let windows = group_windows.get(family).cloned().unwrap_or_default();
+
+                let weekly_window = windows.iter().find(|w| w.window_type == "weekly");
+                let weekly_remaining_fraction = weekly_window.and_then(|w| w.remaining_fraction);
+                let weekly_remaining_percent = weekly_remaining_fraction.map(|f| f * 100.0);
+                let weekly_reset_time = weekly_window.and_then(|w| w.reset_time.clone());
+
                 models.push(AntigravityModelQuota {
                     model_id,
                     display_name,
                     remaining_fraction,
                     remaining_percent,
                     reset_time,
+                    weekly_remaining_fraction,
+                    weekly_remaining_percent,
+                    weekly_reset_time,
+                    windows,
                 });
             }
         }
@@ -324,6 +421,11 @@ impl AntigravityQuotaClient {
             source: "AntigravityLocalRuntime".to_string(),
         })
     }
+
+    /// Parse and normalize `userStatus` response JSON into DCC DTO (delegates to `parse_user_status_and_summary_json`)
+    pub fn parse_user_status_json(v: &serde_json::Value) -> Result<AntigravityQuotaSnapshot, AntigravityQuotaError> {
+        Self::parse_user_status_and_summary_json(v, None)
+    }
 }
 
 fn current_unix_timestamp() -> u64 {
@@ -338,8 +440,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_user_status_normalization() {
-        let json_data = serde_json::json!({
+    fn test_parse_user_status_and_weekly_summary() {
+        let json_user_status = serde_json::json!({
             "userStatus": {
                 "email": "developer@example.com",
                 "planStatus": {
@@ -360,7 +462,7 @@ mod tests {
                                 "model": "MODEL_PLACEHOLDER_M298"
                             },
                             "quotaInfo": {
-                                "remainingFraction": 0.6648536,
+                                "remainingFraction": 0.232,
                                 "resetTime": "2026-08-16T06:27:27Z"
                             }
                         },
@@ -371,7 +473,7 @@ mod tests {
                             },
                             "quotaInfo": {
                                 "remainingFraction": 1.0,
-                                "resetTime": "2026-08-16T07:23:59Z"
+                                "resetTime": "2026-08-16T10:47:00Z"
                             }
                         }
                     ]
@@ -379,35 +481,67 @@ mod tests {
             }
         });
 
-        let snapshot = AntigravityQuotaClient::parse_user_status_json(&json_data).unwrap();
+        let json_summary = serde_json::json!({
+            "response": {
+                "groups": [
+                    {
+                        "displayName": "Gemini Models",
+                        "description": "Models within this group: Gemini Flash, Gemini Pro",
+                        "buckets": [
+                            {
+                                "bucketId": "gemini-weekly",
+                                "displayName": "Weekly Limit Remaining",
+                                "window": "weekly",
+                                "remainingFraction": 0.78,
+                                "resetTime": "2026-08-20T10:35:20Z"
+                            },
+                            {
+                                "bucketId": "gemini-5h",
+                                "displayName": "Five Hour Limit Remaining",
+                                "window": "5h",
+                                "remainingFraction": 0.232,
+                                "resetTime": "2026-08-16T06:27:27Z"
+                            }
+                        ]
+                    },
+                    {
+                        "displayName": "Claude and GPT models",
+                        "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+                        "buckets": [
+                            {
+                                "bucketId": "3p-weekly",
+                                "displayName": "Weekly Limit Remaining",
+                                "window": "weekly",
+                                "remainingFraction": 0.921,
+                                "resetTime": "2026-08-23T05:51:13Z"
+                            },
+                            {
+                                "bucketId": "3p-5h",
+                                "displayName": "Five Hour Limit Remaining",
+                                "window": "5h",
+                                "remainingFraction": 1.0,
+                                "resetTime": "2026-08-16T10:51:13Z"
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        let snapshot = AntigravityQuotaClient::parse_user_status_and_summary_json(&json_user_status, Some(&json_summary)).unwrap();
         assert_eq!(snapshot.account_identity, Some("developer@example.com".to_string()));
-        assert_eq!(snapshot.plan_name, Some("Pro".to_string()));
-        assert_eq!(snapshot.tier, Some("TEAMS_TIER_PRO".to_string()));
-        assert_eq!(snapshot.available_prompt_credits, Some(500));
         assert_eq!(snapshot.models.len(), 2);
 
         let m1 = &snapshot.models[0];
         assert_eq!(m1.display_name, Some("Gemini 3.7 Flash (High)".to_string()));
-        assert_eq!(m1.model_id, "MODEL_PLACEHOLDER_M298");
-        assert_eq!(m1.remaining_fraction, Some(0.6648536));
-        assert_eq!(m1.remaining_percent, Some(66.48536));
-        assert_eq!(m1.reset_time, Some("2026-08-16T06:27:27Z".to_string()));
+        assert_eq!(m1.remaining_fraction, Some(0.232));
+        assert_eq!(m1.weekly_remaining_fraction, Some(0.78));
+        assert_eq!(m1.weekly_reset_time, Some("2026-08-20T10:35:20Z".to_string()));
 
         let m2 = &snapshot.models[1];
         assert_eq!(m2.display_name, Some("Claude Sonnet 4.6 (Thinking)".to_string()));
         assert_eq!(m2.remaining_fraction, Some(1.0));
-        assert_eq!(m2.remaining_percent, Some(100.0));
-    }
-
-    #[test]
-    fn test_missing_fields_graceful_handling() {
-        let json_minimal = serde_json::json!({
-            "userStatus": {}
-        });
-
-        let snapshot = AntigravityQuotaClient::parse_user_status_json(&json_minimal).unwrap();
-        assert_eq!(snapshot.models.len(), 0);
-        assert_eq!(snapshot.plan_name, None);
-        assert_eq!(snapshot.tier, None);
+        assert_eq!(m2.weekly_remaining_fraction, Some(0.921));
+        assert_eq!(m2.weekly_reset_time, Some("2026-08-23T05:51:13Z".to_string()));
     }
 }

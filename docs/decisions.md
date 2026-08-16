@@ -229,3 +229,16 @@
 4. **Fail-Closed Identity Protection:** Trường hợp tài khoản trên Antigravity không khớp (mismatch email), hệ thống chuyển sang trạng thái `AuthRequired`, trả về 0 live models, không làm ô nhiễm cache và không bao giờ hiển thị sai quyền sở hữu quota.
 5. **UI & User Control:** Bổ sung tùy chọn toggle *"Auto-connect on startup"* trong menu tác vụ của Account Card và tích hợp vào modal thêm tài khoản mới.
 6. **Atomic Persistence:** Ghi file cấu hình tài khoản theo cơ chế atomic write (ghi file tạm `.tmp` rồi replace file chính) ngăn ngừa rủi ro file JSON bị hỏng khi tắt ứng dụng đột ngột.
+
+## Decision #30
+**Date:** 2026-08-16
+**Title:** Real Weekly Quota Discovery, Dual-Window Integration & 2-Column High-Density UI Layout (AG-9.29)
+**Reason:** Tích hợp dữ liệu Weekly Quota thật từ Antigravity runtime song song với quota ngắn hạn 5 giờ, đồng thời tái cấu trúc UI Quota Dashboard theo bố cục 2 cột với các thẻ quota group nằm ngang (horizontal tiles), loại bỏ hoàn toàn mock data và bảo vệ tuyệt đối tính cô lập danh tính (identity isolation).
+**Alternative:** Dùng dữ liệu giả lập (mock data) hoặc tính toán Weekly Quota bằng cách suy diễn từ quota 5 giờ (vi phạm nguyên tắc Data Correctness).
+**Impact:**
+1. **Authoritative Runtime Endpoint:** Khám phá và tích hợp endpoint Connect-RPC `/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary`, trả về trực tiếp các quota bucket: `"5h"` (5-hour limit) và `"weekly"` (weekly limit) kèm theo `remainingFraction` và `resetTime` chuẩn xác của Google AI runtime.
+2. **Dual-Window Domain Model:** Mở rộng `ModelQuota` với `weekly_remaining_fraction`, `weekly_remaining_percentage`, `weekly_reset_at` và `Vec<QuotaWindowInfo>`, cho phép biểu diễn đa cửa sổ quota (multi-window) một cách tổng quát và mở rộng.
+3. **2-Column Responsive High-Density Layout:** Triển khai layout 2 cột độc lập (`grid-cols-1 lg:grid-cols-2 gap-3.5 items-start`), mỗi card chứa các thẻ quota group nằm ngang (`grid-cols-1 sm:grid-cols-2 md:grid-cols-3`), tích hợp thanh tiến trình short-term (5h) và thanh tiến trình Weekly (sky blue) trên cùng một quota pool.
+4. **Zero Mock Data & Fail-Closed Safety:** Mọi số liệu Weekly và 5h đều lấy trực tiếp từ `RetrieveUserQuotaSummary` và `GetUserStatus`. Khi xảy ra Identity Mismatch hoặc offline, toàn bộ quota đều bị ẩn (0 models, fail-closed) và không gây ô nhiễm cache.
+5. **Unified Refresh Cycle:** Weekly Quota và 5h Quota được làm mới đồng thời trong cùng một chu kỳ polling của `QuotaPollingEngine`, không tạo thêm timer hay thread ngầm dư thừa.
+

@@ -98,6 +98,11 @@ impl QuotaProvider for AntigravityQuotaProvider {
                         .remaining_percent
                         .or_else(|| fraction.map(|f| (f * 100.0).round()));
 
+                    let weekly_fraction = m.weekly_remaining_fraction;
+                    let weekly_percentage = m
+                        .weekly_remaining_percent
+                        .or_else(|| weekly_fraction.map(|f| (f * 100.0).round()));
+
                     models.push(ModelQuota {
                         model_id: m.model_id.clone(),
                         display_name: m.display_name.unwrap_or(m.model_id),
@@ -105,6 +110,10 @@ impl QuotaProvider for AntigravityQuotaProvider {
                         remaining_percentage: percentage,
                         reset_at: m.reset_time,
                         status: ModelQuotaStatus::Available,
+                        weekly_remaining_fraction: weekly_fraction,
+                        weekly_remaining_percentage: weekly_percentage,
+                        weekly_reset_at: m.weekly_reset_time,
+                        windows: m.windows,
                     });
                 }
 

@@ -108,6 +108,16 @@ pub struct AccountIdentity {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct QuotaWindowInfo {
+    pub window_type: String, // "5h" | "weekly" | "custom"
+    pub remaining_fraction: Option<f64>,
+    pub remaining_percentage: Option<f64>,
+    pub reset_time: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelQuota {
     pub model_id: String,
     pub display_name: String,
@@ -115,6 +125,11 @@ pub struct ModelQuota {
     pub remaining_percentage: Option<f64>,
     pub reset_at: Option<String>,
     pub status: ModelQuotaStatus,
+    pub weekly_remaining_fraction: Option<f64>,
+    pub weekly_remaining_percentage: Option<f64>,
+    pub weekly_reset_at: Option<String>,
+    #[serde(default)]
+    pub windows: Vec<QuotaWindowInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -416,6 +431,10 @@ impl QuotaProviderService {
             remaining_percentage: percentage,
             reset_at,
             status,
+            weekly_remaining_fraction: None,
+            weekly_remaining_percentage: None,
+            weekly_reset_at: None,
+            windows: vec![],
         }
     }
 

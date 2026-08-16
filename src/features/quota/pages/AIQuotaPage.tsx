@@ -7,7 +7,7 @@ export function AIQuotaPage() {
       title="AI Quota"
       description="Monitor your Antigravity account quota, capacity and reset times."
     >
-      <div className="w-full max-w-5xl animate-in fade-in duration-300">
+      <div className="w-full max-w-7xl animate-in fade-in duration-300">
         <QuotaDashboard />
       </div>
     </PageContainer>

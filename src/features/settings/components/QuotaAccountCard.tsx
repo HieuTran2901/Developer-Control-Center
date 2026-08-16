@@ -131,6 +131,16 @@ export function QuotaAccountCard({
     }
   };
 
+  const isMismatch =
+    snapshot.status === 'AuthRequired' &&
+    (snapshot.errorMessage?.includes('Account mismatch') ||
+      snapshot.quota?.safeDiagnosticMessage?.includes('Account mismatch'));
+
+  // Extract runtime email from diagnostic if mismatch
+  const mismatchRuntimeEmail =
+    snapshot.errorMessage?.match(/authenticated as ([^,]+),/)?.[1] ||
+    snapshot.quota?.safeDiagnosticMessage?.match(/authenticated as ([^,]+),/)?.[1];
+
   return (
     <>
       <Card
@@ -139,9 +149,9 @@ export function QuotaAccountCard({
         }`}
       >
         {/* Compact Card Header */}
-        <CardHeader className="py-2.5 px-3.5 border-b border-border/40 bg-muted/5 space-y-0">
+        <CardHeader className="py-3 px-4 border-b border-border/40 bg-muted/5 space-y-1">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
               <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-primary/15 text-primary border border-primary/25 shrink-0 uppercase tracking-wider">
                 {snapshot.provider ? snapshot.provider.replace('_', ' ') : 'ANTIGRAVITY'}
               </span>
@@ -182,13 +192,15 @@ export function QuotaAccountCard({
                 </h3>
               )}
 
-              <span className="text-[11px] text-muted-foreground truncate hidden md:inline">
-                · {snapshot.tier || 'Standard Tier'} · {snapshot.email}
-              </span>
+              <StatusBadge status={snapshot.status} errorMessage={snapshot.errorMessage} />
             </div>
 
-            <div className="flex items-center gap-1.5 shrink-0">
-              <StatusBadge status={snapshot.status} errorMessage={snapshot.errorMessage} />
+            <div className="flex items-center gap-2 shrink-0">
+              {relativeSyncTime && (
+                <span className="text-[11px] text-muted-foreground hidden sm:inline">
+                  Updated {relativeSyncTime}
+                </span>
+              )}
 
               {/* Three dots kebab menu */}
               <div className="relative" ref={menuRef}>
@@ -277,10 +289,14 @@ export function QuotaAccountCard({
               </div>
             </div>
           </div>
+
+          <div className="text-[11px] text-muted-foreground truncate">
+            {snapshot.tier || 'Standard Tier'} · {snapshot.email}
+          </div>
         </CardHeader>
 
-        {/* Compact Card Content */}
-        <CardContent className="p-3 space-y-2.5 flex-1">
+        {/* Card Content */}
+        <CardContent className="p-3.5 space-y-3 flex-1">
           {/* Stale Data Warning Banner */}
           {isStale && (
             <div className="flex items-center gap-2 p-2 rounded-lg bg-warning/10 border border-warning/20 text-xs text-warning font-sans">
@@ -289,37 +305,54 @@ export function QuotaAccountCard({
             </div>
           )}
 
-          {/* Antigravity Not Running / Auth Required / Mismatch Banner */}
+          {/* Identity Mismatch / Offline Banner */}
           {(snapshot.status === 'AuthRequired' || !snapshot.quota) && (
-            <div className="p-2.5 rounded-lg bg-muted/30 border border-border/70 text-xs space-y-1.5 font-sans">
-              <div className="flex items-center gap-1.5 font-semibold text-foreground text-xs">
-                {snapshot.errorMessage?.includes('Account mismatch') ? (
-                  <>
-                    <Icon name="AlertTriangle" className="w-3.5 h-3.5 text-warning shrink-0" />
-                    <span className="text-warning font-semibold">Account Identity Mismatch</span>
-                  </>
-                ) : (
-                  <>
+            <div>
+              {isMismatch ? (
+                <div className="p-3.5 rounded-xl bg-muted/25 border border-border/70 text-xs space-y-2.5 font-sans">
+                  <div className="flex items-center gap-2 text-warning font-semibold text-xs">
+                    <Icon name="AlertTriangle" className="w-4 h-4 text-warning shrink-0" />
+                    <span>Account Identity Mismatch</span>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground space-y-1 leading-relaxed">
+                    <p>
+                      Antigravity is currently authenticated as{' '}
+                      <span className="font-semibold text-foreground font-mono">
+                        {mismatchRuntimeEmail || 'another account'}
+                      </span>
+                    </p>
+                    <p>
+                      but this account is{' '}
+                      <span className="font-semibold text-foreground font-mono">
+                        {snapshot.email}
+                      </span>
+                      .
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3.5 rounded-xl bg-muted/25 border border-border/70 text-xs space-y-2 font-sans">
+                  <div className="flex items-center gap-1.5 font-semibold text-foreground text-xs">
                     <Icon name="Cpu" className="w-3.5 h-3.5 text-primary shrink-0" />
                     <span>Antigravity Local Runtime Offline</span>
-                  </>
-                )}
-              </div>
-              <p className="text-[11px] text-muted-foreground leading-normal">
-                {snapshot.errorMessage ||
-                  snapshot.quota?.safeDiagnosticMessage ||
-                  'Antigravity is not currently running. Please launch Antigravity to monitor live quota.'}
-              </p>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-normal">
+                    {snapshot.errorMessage ||
+                      snapshot.quota?.safeDiagnosticMessage ||
+                      'Antigravity is not currently running. Please launch Antigravity to monitor live quota.'}
+                  </p>
+                </div>
+              )}
 
               {connectErrorMessage && (
-                <div className="p-1.5 rounded bg-destructive/10 border border-destructive/20 text-destructive text-[10px] flex items-center gap-1">
+                <div className="mt-2 p-1.5 rounded bg-destructive/10 border border-destructive/20 text-destructive text-[10px] flex items-center gap-1">
                   <Icon name="AlertTriangle" className="w-3 h-3 shrink-0" />
                   <span className="truncate">{connectErrorMessage}</span>
                 </div>
               )}
 
               {connectStatusMessage && (
-                <div className="p-1.5 rounded bg-primary/10 border border-primary/20 text-primary text-[10px] flex items-center gap-1 font-medium">
+                <div className="mt-2 p-1.5 rounded bg-primary/10 border border-primary/20 text-primary text-[10px] flex items-center gap-1 font-medium">
                   <Icon name="Loader2" className="w-3 h-3 animate-spin shrink-0" />
                   <span>{connectStatusMessage}</span>
                 </div>
@@ -341,7 +374,7 @@ export function QuotaAccountCard({
 
             if (quotaGroups.length > 0) {
               return (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
                   {quotaGroups.map((group) => {
                     const remainingPctNumber = getRemainingPercentageNumber(
                       group.remainingFraction,
@@ -351,79 +384,114 @@ export function QuotaAccountCard({
                       group.remainingFraction,
                       group.remainingPercentage
                     );
-                    const countdown = formatResetCountdown(group.resetAt);
+                    const shortCountdown = formatShortResetCountdown(group.resetAt);
+
+                    const weeklyPctNumber = getRemainingPercentageNumber(
+                      group.weeklyRemainingFraction,
+                      group.weeklyRemainingPercentage
+                    );
+                    const weeklyPctFormatted = formatQuotaPercentage(
+                      group.weeklyRemainingFraction,
+                      group.weeklyRemainingPercentage
+                    );
+                    const weeklyCountdown = formatWeeklyResetCountdown(group.weeklyResetAt);
+                    const hasWeekly =
+                      group.weeklyRemainingFraction !== null &&
+                      group.weeklyRemainingFraction !== undefined;
+
                     const isExpanded = expandedGroupIds.has(group.id);
 
                     return (
                       <div
                         key={group.id}
-                        className="p-2 rounded-lg bg-muted/25 border border-border/60 flex flex-col justify-between space-y-1.5 font-sans hover:border-border transition-colors"
+                        className="p-3 rounded-lg bg-muted/20 border border-border/70 flex flex-col justify-between space-y-2.5 font-sans hover:border-border transition-colors"
                       >
-                        {/* Header Row: Name & Percentage */}
-                        <div className="flex items-center justify-between text-xs gap-1">
-                          <span
-                            className="font-semibold text-foreground truncate text-[11px]"
-                            title={group.groupName}
-                          >
-                            {group.groupName}
-                          </span>
-                          <span className="font-mono font-bold text-foreground text-xs shrink-0">
-                            {pctFormatted}
-                          </span>
+                        {/* Short-Term Section */}
+                        <div className="space-y-1.5">
+                          {/* Header Row: Name & Percentage */}
+                          <div className="flex items-center justify-between text-xs gap-1">
+                            <span
+                              className="font-bold text-foreground truncate text-xs"
+                              title={group.groupName}
+                            >
+                              {group.groupName}
+                            </span>
+                            <span className="font-mono font-bold text-foreground text-xs shrink-0">
+                              {pctFormatted}
+                            </span>
+                          </div>
+
+                          {/* Short-term Progress Bar */}
+                          <div className="w-full bg-muted/70 rounded-full h-1.5 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                remainingPctNumber <= 15
+                                  ? 'bg-amber-500'
+                                  : remainingPctNumber <= 40
+                                  ? 'bg-warning'
+                                  : 'bg-primary'
+                              }`}
+                              style={{ width: `${remainingPctNumber}%` }}
+                            />
+                          </div>
+
+                          {/* Short-term Metadata */}
+                          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                            <span className="truncate">
+                              {group.isShared ? `${group.models.length} models · ` : 'Individual · '}
+                              {shortCountdown} · {group.status === 'Available' ? 'Ready' : group.status}
+                            </span>
+                          </div>
                         </div>
 
-                        {/* Progress Bar (Rendered ONCE per shared group) */}
-                        <div className="w-full bg-muted/80 rounded-full h-1.5 overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              remainingPctNumber <= 15
-                                ? 'bg-destructive'
-                                : remainingPctNumber <= 40
-                                ? 'bg-warning'
-                                : 'bg-primary'
-                            }`}
-                            style={{ width: `${remainingPctNumber}%` }}
-                          />
-                        </div>
+                        {/* Weekly Section */}
+                        {hasWeekly && (
+                          <div className="space-y-1.5 pt-1.5 border-t border-border/30">
+                            <div className="flex items-center justify-between text-xs gap-1">
+                              <span className="text-xs font-semibold text-foreground">
+                                Weekly
+                              </span>
+                              <span className="font-mono font-bold text-foreground text-xs shrink-0">
+                                {weeklyPctFormatted}
+                              </span>
+                            </div>
 
-                        {/* Metadata Row: Models count & Countdown */}
-                        <div className="flex items-center justify-between text-[10px] text-muted-foreground gap-1">
-                          <span className="truncate">
-                            {group.isShared ? `${group.models.length} models · ` : 'Individual · '}
-                            {countdown}
-                          </span>
-                          <span className="font-medium shrink-0">
-                            {group.status === 'Available' ? 'Ready' : group.status}
-                          </span>
-                        </div>
+                            {/* Weekly Progress Bar (Blue / Sky) */}
+                            <div className="w-full bg-muted/70 rounded-full h-1.5 overflow-hidden">
+                              <div
+                                className="h-full rounded-full transition-all duration-500 bg-sky-500"
+                                style={{ width: `${weeklyPctNumber}%` }}
+                              />
+                            </div>
 
-                        {/* Expand / Collapse Control for shared groups */}
+                            {/* Weekly Metadata */}
+                            <div className="text-[11px] text-muted-foreground">
+                              {weeklyCountdown}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Shared Models Collapsible */}
                         {group.isShared && (
                           <div className="pt-1 border-t border-border/30">
                             <button
                               type="button"
                               onClick={() => toggleGroup(group.id)}
-                              className="w-full flex items-center justify-between text-[10px] font-medium text-muted-foreground hover:text-foreground py-0.5 transition-colors group/btn"
+                              className="w-full flex items-center justify-between text-[11px] font-medium text-muted-foreground hover:text-foreground py-0.5 transition-colors group/btn"
                             >
-                              <span className="flex items-center gap-1 truncate">
-                                <Icon
-                                  name={isExpanded ? 'ChevronDown' : 'ChevronRight'}
-                                  className="w-3 h-3 text-primary shrink-0 transition-transform"
-                                />
-                                <span className="truncate">
-                                  {isExpanded
-                                    ? 'Hide models'
-                                    : `${group.models.length} models using this`}
-                                </span>
+                              <span className="truncate">
+                                {isExpanded
+                                  ? 'Hide models'
+                                  : `${group.models.length} models using this quota`}
                               </span>
-                              <span className="text-[9px] text-muted-foreground group-hover/btn:text-foreground shrink-0">
-                                {isExpanded ? 'Collapse' : 'Expand'}
-                              </span>
+                              <Icon
+                                name={isExpanded ? 'ChevronDown' : 'ChevronRight'}
+                                className="w-3.5 h-3.5 text-muted-foreground group-hover/btn:text-foreground shrink-0 transition-transform"
+                              />
                             </button>
 
-                            {/* Nested Model List */}
                             {isExpanded && (
-                              <div className="mt-1 pl-2 border-l-2 border-primary/40 space-y-1 max-h-32 overflow-y-auto pr-1 animate-in fade-in duration-150">
+                              <div className="mt-1.5 pl-2 border-l-2 border-primary/40 space-y-1 max-h-32 overflow-y-auto pr-1 animate-in fade-in duration-150">
                                 {group.models.map((model) => (
                                   <div
                                     key={model.modelId}
@@ -463,56 +531,56 @@ export function QuotaAccountCard({
           })()}
         </CardContent>
 
-        {/* Compact Card Footer */}
-        <CardFooter className="py-2 px-3.5 border-t border-border/40 bg-muted/5 flex items-center justify-between text-[11px] text-muted-foreground">
-          <div className="flex items-center gap-1 text-[11px]">
-            <Icon name="Clock" className="w-3 h-3 text-muted-foreground shrink-0" />
+        {/* Card Footer */}
+        <CardFooter className="py-2.5 px-4 border-t border-border/40 bg-muted/5 flex items-center justify-between text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-[11px]">
+            <Icon name="Clock" className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
             <span>
               {relativeSyncTime ? `Updated ${relativeSyncTime}` : 'Not synced yet'}
             </span>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
             {(!snapshot.quota || snapshot.status !== 'Online') && (
               <Button
                 onClick={handleConnectLocalAntigravity}
                 disabled={connectStage !== 'idle' && connectStage !== 'failed'}
                 size="sm"
-                className="h-6 px-2 text-[11px] font-medium gap-1 bg-primary text-primary-foreground hover:bg-primary/90 transition-all"
+                className="h-7 px-3 text-xs font-medium gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 transition-all shadow-xs"
               >
                 {connectStage === 'idle' && (
                   <>
-                    <Icon name="Cpu" className="w-3 h-3" />
+                    <Icon name="Cpu" className="w-3.5 h-3.5" />
                     <span>Connect Antigravity</span>
                   </>
                 )}
                 {connectStage === 'detecting' && (
                   <>
-                    <Icon name="Loader2" className="w-3 h-3 animate-spin" />
+                    <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                     <span>Detecting...</span>
                   </>
                 )}
                 {connectStage === 'connecting' && (
                   <>
-                    <Icon name="Loader2" className="w-3 h-3 animate-spin" />
+                    <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                     <span>Connecting...</span>
                   </>
                 )}
                 {connectStage === 'reading' && (
                   <>
-                    <Icon name="Loader2" className="w-3 h-3 animate-spin" />
+                    <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                     <span>Reading Quota...</span>
                   </>
                 )}
                 {connectStage === 'connected' && (
                   <>
-                    <Icon name="CheckCircle" className="w-3 h-3 text-emerald-400" />
+                    <Icon name="CheckCircle" className="w-3.5 h-3.5 text-emerald-400" />
                     <span>Connected</span>
                   </>
                 )}
                 {connectStage === 'failed' && (
                   <>
-                    <Icon name="RefreshCw" className="w-3 h-3" />
+                    <Icon name="RefreshCw" className="w-3.5 h-3.5" />
                     <span>Retry Detection</span>
                   </>
                 )}
@@ -524,11 +592,11 @@ export function QuotaAccountCard({
               disabled={isRefreshing || isDisabled}
               variant="outline"
               size="sm"
-              className="h-6 px-2 text-[11px] font-medium gap-1"
+              className="h-7 px-2.5 text-xs font-medium gap-1"
             >
               <Icon
                 name={isRefreshing ? 'Loader2' : 'RefreshCw'}
-                className={`w-3 h-3 ${isRefreshing ? 'animate-spin text-primary' : ''}`}
+                className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-primary' : ''}`}
               />
               <span>{isRefreshing ? 'Refreshing' : 'Refresh'}</span>
             </Button>
@@ -588,50 +656,50 @@ function StatusBadge({ status, errorMessage }: { status: AccountPollingState; er
   switch (status) {
     case 'Online':
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-success/10 text-success border border-success/30 shrink-0">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-success/10 text-success border border-success/30 shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-success" />
           Connected
         </span>
       );
     case 'Checking':
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary border border-primary/30 shrink-0">
-          <Icon name="Loader2" className="w-2.5 h-2.5 animate-spin" />
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-primary/10 text-primary border border-primary/30 shrink-0">
+          <Icon name="Loader2" className="w-3 h-3 animate-spin" />
           Restoring...
         </span>
       );
     case 'AuthRequired':
       if (errorMessage?.includes('Account mismatch')) {
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-warning/10 text-warning border border-warning/30 shrink-0">
-            <Icon name="AlertTriangle" className="w-2.5 h-2.5" />
-            Identity Mismatch
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-warning/10 text-warning border border-warning/30 shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-warning" />
+            Antigravity Offline
           </span>
         );
       }
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-warning/10 text-warning border border-warning/30 shrink-0">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-warning/10 text-warning border border-warning/30 shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-warning" />
           Antigravity Offline
         </span>
       );
     case 'RateLimited':
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-warning/10 text-warning border border-warning/30 shrink-0">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-warning/10 text-warning border border-warning/30 shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-warning" />
           Rate Limited
         </span>
       );
     case 'NetworkError':
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-destructive/10 text-destructive border border-destructive/30 shrink-0">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-destructive/10 text-destructive border border-destructive/30 shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
           Offline
         </span>
       );
     case 'ProviderError':
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-destructive/10 text-destructive border border-destructive/30 shrink-0">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-destructive/10 text-destructive border border-destructive/30 shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
           Error
         </span>
@@ -639,7 +707,7 @@ function StatusBadge({ status, errorMessage }: { status: AccountPollingState; er
     case 'Disabled':
     default:
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-muted text-muted-foreground border border-border shrink-0">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-muted text-muted-foreground border border-border shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground" />
           Disabled
         </span>
@@ -661,7 +729,7 @@ function formatRelativeTime(timestampStr: string): string {
   return `${diffHours}h ago`;
 }
 
-function formatResetCountdown(resetAtStr: string | null | undefined): string {
+function formatShortResetCountdown(resetAtStr: string | null | undefined): string {
   if (!resetAtStr) return 'Reset unavailable';
 
   const ts = Date.parse(resetAtStr) || Number(resetAtStr) * 1000;
@@ -691,12 +759,44 @@ function formatResetCountdown(resetAtStr: string | null | undefined): string {
   return `Reset ${diffSecs}s`;
 }
 
+function formatWeeklyResetCountdown(resetAtStr: string | null | undefined): string {
+  if (!resetAtStr) return 'Weekly reset unavailable';
+
+  const ts = Date.parse(resetAtStr) || Number(resetAtStr) * 1000;
+  if (!ts || isNaN(ts)) {
+    return `Reset: ${resetAtStr}`;
+  }
+
+  const diffMs = ts - Date.now();
+  if (diffMs <= 0) return 'Resets now';
+
+  const diffSecs = Math.floor(diffMs / 1000);
+  const diffHours = Math.floor(diffSecs / 3600);
+  const days = Math.floor(diffHours / 24);
+  const hours = diffHours % 24;
+
+  if (days > 0 && hours > 0) {
+    return `Reset in ${days}d ${hours}h`;
+  }
+  if (days > 0) {
+    return `Reset in ${days}d`;
+  }
+  if (diffHours > 0) {
+    return `Reset in ${diffHours}h`;
+  }
+  const minutes = Math.floor((diffSecs % 3600) / 60);
+  return `Reset in ${minutes}m`;
+}
+
 export interface QuotaGroupViewModel {
   id: string;
   groupName: string;
   remainingFraction: number | null;
   remainingPercentage: number | null;
   resetAt: string | null;
+  weeklyRemainingFraction: number | null;
+  weeklyRemainingPercentage: number | null;
+  weeklyResetAt: string | null;
   status: string;
   isShared: boolean;
   models: ModelQuota[];
@@ -753,6 +853,9 @@ export function groupModelsIntoQuotaPools(models: ModelQuota[]): QuotaGroupViewM
       remainingFraction: first.remainingFraction,
       remainingPercentage: first.remainingPercentage,
       resetAt: first.resetAt,
+      weeklyRemainingFraction: first.weeklyRemainingFraction ?? null,
+      weeklyRemainingPercentage: first.weeklyRemainingPercentage ?? null,
+      weeklyResetAt: first.weeklyResetAt ?? null,
       status: first.status,
       isShared,
       models: groupModels,
@@ -772,7 +875,7 @@ function formatQuotaPercentage(
   if (fraction !== null && fraction !== undefined && !isNaN(fraction)) {
     return `${(Number(fraction) * 100).toFixed(1)}%`;
   }
-  return '100%';
+  return '100.0%';
 }
 
 function getRemainingPercentageNumber(

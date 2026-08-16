@@ -22,6 +22,14 @@ export interface AccountIdentity {
   status: string;
 }
 
+export interface QuotaWindowInfo {
+  windowType: string; // "5h" | "weekly" | "custom"
+  remainingFraction: number | null;
+  remainingPercentage: number | null;
+  resetTime: string | null;
+  description?: string | null;
+}
+
 export interface ModelQuota {
   modelId: string;
   displayName: string;
@@ -29,6 +37,10 @@ export interface ModelQuota {
   remainingPercentage: number | null;
   resetAt: string | null;
   status: ModelQuotaStatus;
+  weeklyRemainingFraction?: number | null;
+  weeklyRemainingPercentage?: number | null;
+  weeklyResetAt?: string | null;
+  windows?: QuotaWindowInfo[];
 }
 
 export interface QuotaStatus {
