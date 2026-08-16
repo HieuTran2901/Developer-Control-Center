@@ -393,8 +393,18 @@ impl QuotaPollingEngine {
             let now_ts = current_unix_timestamp();
             let next_ts = now_ts + new_settings.interval_seconds;
             *self.next_global_refresh.write().await = Some(next_ts.to_string());
+
+            // AG-9.32: Recalculate each in-memory snapshot's next_refresh_at deadline immediately
+            let mut snaps = self.snapshots.write().await;
+            for snap in snaps.values_mut() {
+                snap.next_refresh_at = Some(next_ts.to_string());
+            }
         } else {
             *self.next_global_refresh.write().await = None;
+            let mut snaps = self.snapshots.write().await;
+            for snap in snaps.values_mut() {
+                snap.next_refresh_at = None;
+            }
         }
 
         let handle_opt = self.app_handle.read().await.clone();
@@ -487,16 +497,25 @@ impl QuotaPollingEngine {
                     let next_cycle_ts = now_ts + interval_secs;
                     *next_global_refresh.write().await = Some(next_cycle_ts.to_string());
 
+                    // AG-9.32: Advance deadlines for all dispatched accounts immediately to avoid 1s polling storm
+                    {
+                        let mut snaps = snapshots.write().await;
+                        for acc in &accounts {
+                            if acc.enabled && acc.provider() == QuotaProviderId::Antigravity {
+                                if let Some(snap) = snaps.get_mut(&acc.account_id) {
+                                    snap.next_refresh_at = Some(next_cycle_ts.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    // AG-9.32: Bounded asynchronous dispatch without account dropping
                     for acc in accounts {
                         if !acc.enabled || acc.provider() != QuotaProviderId::Antigravity {
                             continue;
                         }
 
-                        let permit = match semaphore.clone().try_acquire_owned() {
-                            Ok(p) => p,
-                            Err(_) => continue,
-                        };
-
+                        let sem = semaphore.clone();
                         let acc_clone = acc.clone();
                         let snapshots_clone = snapshots.clone();
                         let provider_clone = provider.clone();
@@ -504,16 +523,18 @@ impl QuotaPollingEngine {
                         let in_flight_clone = in_flight.clone();
 
                         tokio::spawn(async move {
-                            let _permit = permit;
-                            Self::execute_account_refresh(
-                                &acc_clone,
-                                snapshots_clone,
-                                provider_clone,
-                                app_handle_clone,
-                                in_flight_clone,
-                                interval_secs,
-                            )
-                            .await;
+                            if let Ok(permit) = sem.acquire_owned().await {
+                                let _permit = permit;
+                                Self::execute_account_refresh(
+                                    &acc_clone,
+                                    snapshots_clone,
+                                    provider_clone,
+                                    app_handle_clone,
+                                    in_flight_clone,
+                                    interval_secs,
+                                )
+                                .await;
+                            }
                         });
                     }
 
@@ -1367,5 +1388,115 @@ mod tests {
         assert!(reconnected.iter().any(|s| s.account_id == "acc-a"));
         assert!(!reconnected.iter().any(|s| s.account_id == "acc-b"));
     }
+
+
+
+    #[tokio::test]
+    async fn test_interval_update_recalculates_snapshot_deadlines() {
+        let storage = Arc::new(MockCredentialStorage::new());
+        let provider = Arc::new(QuotaProviderService::new(storage));
+        let registry = Arc::new(AccountRegistry::new(None));
+        let engine = QuotaPollingEngine::new(registry, provider, None);
+
+        // Setup snapshot with 300s deadline
+        let now_ts = current_unix_timestamp();
+        {
+            let mut snaps = engine.snapshots.write().await;
+            snaps.insert(
+                "acc-test".to_string(),
+                AccountQuotaSnapshot {
+                    account_id: "acc-test".to_string(),
+                    provider: QuotaProviderId::Antigravity,
+                    email: "test@example.com".to_string(),
+                    display_name: None,
+                    tier: None,
+                    status: AccountPollingState::Online,
+                    auto_connect: true,
+                    data_source: crate::monitor::quota_provider::QuotaDataSource::RealProvider,
+                    data_quality: crate::monitor::quota_provider::QuotaDataQuality::Live,
+                    last_updated_at: now_ts.to_string(),
+                    last_successful_sync_at: Some(now_ts.to_string()),
+                    next_refresh_at: Some((now_ts + 300).to_string()),
+                    quota: None,
+                    error_message: None,
+                },
+            );
+        }
+
+        // Change interval to 30s
+        let res = engine
+            .update_refresh_settings(QuotaRefreshSettings {
+                auto_refresh_enabled: true,
+                interval_seconds: 30,
+            })
+            .await;
+        assert!(res.is_ok());
+
+        // Verify next_global_refresh and snapshot next_refresh_at are both now + 30
+        let status = engine.get_status().await;
+        assert_eq!(status.interval_seconds, 30);
+        let next_global = status.next_global_refresh_at.expect("next_global_refresh_at");
+        let next_global_num = next_global.parse::<u64>().unwrap();
+        assert!(next_global_num <= current_unix_timestamp() + 30);
+
+        let snap = engine.get_account_state("acc-test").await.unwrap();
+        let snap_next = snap.next_refresh_at.expect("snapshot next_refresh_at");
+        let snap_next_num = snap_next.parse::<u64>().unwrap();
+        assert_eq!(snap_next_num, next_global_num);
+    }
+
+    #[tokio::test]
+    async fn test_background_dispatch_does_not_drop_accounts_when_semaphore_is_full() {
+        let storage = Arc::new(MockCredentialStorage::new());
+        let provider = Arc::new(QuotaProviderService::new(storage));
+        let registry = Arc::new(AccountRegistry::new(None));
+
+        // Register 4 accounts
+        for i in 1..=4 {
+            let acc = AccountMonitorConfig {
+                account_id: format!("acc-{}", i),
+                provider: Some(QuotaProviderId::Antigravity),
+                email: format!("user{}@example.com", i),
+                display_name: Some(format!("Account {}", i)),
+                tier: None,
+                enabled: true,
+                auto_connect: true,
+                polling_interval_seconds: 120,
+                created_at: "1723719000".to_string(),
+                updated_at: "1723719000".to_string(),
+            };
+            registry.register(acc).await.unwrap();
+        }
+
+        let _engine = QuotaPollingEngine::new(registry.clone(), provider, None);
+
+        // Verify that with Semaphore(2) and 4 accounts, acquire_owned handles all 4 without dropping
+        let sem = Arc::new(Semaphore::new(2));
+        let accounts = registry.list().await;
+        assert_eq!(accounts.len(), 5); // default + 4 accounts = 5
+
+        let completed = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let mut handles = Vec::new();
+
+        for acc in accounts {
+            let s = sem.clone();
+            let c = completed.clone();
+            let aid = acc.account_id.clone();
+            handles.push(tokio::spawn(async move {
+                let permit = s.acquire_owned().await.unwrap();
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                c.lock().await.push(aid);
+                drop(permit);
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        let count = completed.lock().await.len();
+        assert_eq!(count, 5, "All 5 accounts must acquire permit and complete without being dropped");
+    }
 }
+
 

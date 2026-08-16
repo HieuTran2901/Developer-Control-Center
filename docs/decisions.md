@@ -242,3 +242,28 @@
 4. **Zero Mock Data & Fail-Closed Safety:** Mọi số liệu Weekly và 5h đều lấy trực tiếp từ `RetrieveUserQuotaSummary` và `GetUserStatus`. Khi xảy ra Identity Mismatch hoặc offline, toàn bộ quota đều bị ẩn (0 models, fail-closed) và không gây ô nhiễm cache.
 5. **Unified Refresh Cycle:** Weekly Quota và 5h Quota được làm mới đồng thời trong cùng một chu kỳ polling của `QuotaPollingEngine`, không tạo thêm timer hay thread ngầm dư thừa.
 
+## Decision #31
+**Date:** 2026-08-16
+**Title:** Structured Semantic Slot Layout & Vertical Alignment for Quota Group Cards (AG-9.30)
+**Reason:** Khắc phục hiện tượng lệch hàng (vertical misalignment) của thẻ quota GPT-OSS 120B so với Claude và Gemini trong cùng một tài khoản. Hiện tượng này xuất phát từ việc sử dụng `justify-between` khiến thẻ không có nút mở rộng danh sách model con (`group.isShared == false`) bị đẩy phần Weekly xuống tận đáy thẻ.
+**Alternative:** Dùng khoảng cách cứng (hard-coded margin-top/padding-top) hoặc chèn dữ liệu Weekly giả lập cho thẻ thiếu (vi phạm nguyên tắc Responsive và Data Correctness).
+**Impact:**
+1. **Semantic Slot Layout:** Cấu trúc mỗi thẻ quota group thành 3 slot chuẩn:
+   - Slot 1: Short-term section (Header + 5h Progress Bar + Metadata)
+   - Slot 2: Weekly section (Header + Weekly Progress Bar + Reset Countdown) hoặc Reserved Slot (`min-h-[58px]`) nếu nhóm không có Weekly.
+   - Slot 3: Footer slot có `mt-auto` (Collapsible trigger nếu `isShared == true` hoặc spacer giữ chuẩn baseline).
+2. **Horizontal Grid Items-Stretch:** Đảm bảo tất cả các thẻ quota group trong cùng một hàng có chiều cao đồng đều (`items-stretch` + `h-full`), trong khi Weekly section luôn bắt đầu tại cùng một tọa độ Y trên mọi thẻ anh em.
+3. **Zero Data/Provider Mutation:** Không thay đổi bất kỳ logic backend, provider, hay tính toán quota nào; hoàn toàn duy trì sự trung thực của dữ liệu runtime.
+
+## Decision #32
+**Date:** 2026-08-16
+**Title:** Bounded Asynchronous Semaphore Dispatching & Dynamic Deadline Recalculation for Quota Auto Refresh (AG-9.32)
+**Reason:** Khắc phục hiện tượng tài khoản kết nối bị bỏ sót (account starvation) trong luồng auto-refresh ngầm khi số lượng tài khoản đăng ký vượt quá giới hạn semaphore (`MAX_CONCURRENT_REFRESHES = 2`), và khắc phục lỗi lệch hạn chót làm mới (`next_refresh_at`) khi người dùng thay đổi khoảng thời gian polling (polling interval).
+**Alternative:** Tăng `MAX_CONCURRENT_REFRESHES` lên bằng số lượng tài khoản (che giấu lỗi, gây bùng nổ tài nguyên) hoặc bỏ qua việc tính toán lại deadline snapshot (khiến UI đếm lùi về 00:00 nhưng backend không kích hoạt refresh).
+**Impact:**
+1. **Asynchronous Bounded Dispatching:** Trong background loop của `QuotaPollingEngine`, thay thế việc gọi `try_acquire_owned()` đồng bộ bằng tác vụ bất đồng bộ `tokio::spawn(async move { if let Ok(permit) = sem.acquire_owned().await { ... } })`. Nhờ đó, tài khoản ở vị trí sau (như tài khoản thứ 3 và 4) sẽ kiên nhẫn chờ permit và được refresh đầy đủ ngay khi permit được giải phóng, tuyệt đối không bị drop.
+2. **Storm-Free Pre-Scheduling:** Ngay khi một chu kỳ batch được kích hoạt, deadline `snap.next_refresh_at` của tất cả các tài khoản hợp lệ được tạm thời tịnh tiến về tương lai (`now_ts + interval_seconds`) trong cache `snapshots`, ngăn chặn triệt để hiện tượng vòng lặp 1 giây bị kích hoạt liên tục (polling storm) khi các tác vụ đang chờ permit.
+3. **Dynamic Snapshot Deadline Synchronization:** Khi hàm `update_refresh_settings()` được gọi, hệ thống cập nhật đồng thời cả `next_global_refresh` lẫn toàn bộ `snap.next_refresh_at` của các snapshot trong bộ nhớ, đảm bảo nhịp đếm lùi trên UI và điều kiện kích hoạt backend luôn đồng bộ 100%.
+
+
+

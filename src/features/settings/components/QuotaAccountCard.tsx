@@ -373,8 +373,12 @@ export function QuotaAccountCard({
             const quotaGroups = groupModelsIntoQuotaPools(snapshot.quota?.models || []);
 
             if (quotaGroups.length > 0) {
+              const anyHasWeekly = quotaGroups.some(
+                (g) => g.weeklyRemainingFraction !== null && g.weeklyRemainingFraction !== undefined
+              );
+
               return (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 items-stretch">
                   {quotaGroups.map((group) => {
                     const remainingPctNumber = getRemainingPercentageNumber(
                       group.remainingFraction,
@@ -404,9 +408,9 @@ export function QuotaAccountCard({
                     return (
                       <div
                         key={group.id}
-                        className="p-3 rounded-lg bg-muted/20 border border-border/70 flex flex-col justify-between space-y-2.5 font-sans hover:border-border transition-colors"
+                        className="p-3 rounded-lg bg-muted/20 border border-border/70 flex flex-col space-y-2.5 font-sans hover:border-border transition-colors h-full"
                       >
-                        {/* Short-Term Section */}
+                        {/* Slot 1: Short-Term Section */}
                         <div className="space-y-1.5">
                           {/* Header Row: Name & Percentage */}
                           <div className="flex items-center justify-between text-xs gap-1">
@@ -444,8 +448,8 @@ export function QuotaAccountCard({
                           </div>
                         </div>
 
-                        {/* Weekly Section */}
-                        {hasWeekly && (
+                        {/* Slot 2: Weekly Section / Reserved Slot */}
+                        {hasWeekly ? (
                           <div className="space-y-1.5 pt-1.5 border-t border-border/30">
                             <div className="flex items-center justify-between text-xs gap-1">
                               <span className="text-xs font-semibold text-foreground">
@@ -469,49 +473,57 @@ export function QuotaAccountCard({
                               {weeklyCountdown}
                             </div>
                           </div>
-                        )}
+                        ) : anyHasWeekly ? (
+                          /* Reserved empty slot to maintain vertical rhythm without fake data */
+                          <div className="pt-1.5 border-t border-transparent min-h-[58px]" aria-hidden="true" />
+                        ) : null}
 
-                        {/* Shared Models Collapsible */}
-                        {group.isShared && (
-                          <div className="pt-1 border-t border-border/30">
-                            <button
-                              type="button"
-                              onClick={() => toggleGroup(group.id)}
-                              className="w-full flex items-center justify-between text-[11px] font-medium text-muted-foreground hover:text-foreground py-0.5 transition-colors group/btn"
-                            >
-                              <span className="truncate">
-                                {isExpanded
-                                  ? 'Hide models'
-                                  : `${group.models.length} models using this quota`}
-                              </span>
-                              <Icon
-                                name={isExpanded ? 'ChevronDown' : 'ChevronRight'}
-                                className="w-3.5 h-3.5 text-muted-foreground group-hover/btn:text-foreground shrink-0 transition-transform"
-                              />
-                            </button>
+                        {/* Slot 3: Footer / Models Section (Anchored to bottom) */}
+                        <div className="mt-auto pt-1.5 border-t border-border/30 min-h-[26px] flex flex-col justify-center">
+                          {group.isShared ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => toggleGroup(group.id)}
+                                className="w-full flex items-center justify-between text-[11px] font-medium text-muted-foreground hover:text-foreground py-0.5 transition-colors group/btn"
+                              >
+                                <span className="truncate">
+                                  {isExpanded
+                                    ? 'Hide models'
+                                    : `${group.models.length} models using this quota`}
+                                </span>
+                                <Icon
+                                  name={isExpanded ? 'ChevronDown' : 'ChevronRight'}
+                                  className="w-3.5 h-3.5 text-muted-foreground group-hover/btn:text-foreground shrink-0 transition-transform"
+                                />
+                              </button>
 
-                            {isExpanded && (
-                              <div className="mt-1.5 pl-2 border-l-2 border-primary/40 space-y-1 max-h-32 overflow-y-auto pr-1 animate-in fade-in duration-150">
-                                {group.models.map((model) => (
-                                  <div
-                                    key={model.modelId}
-                                    className="flex items-center justify-between text-[10px] gap-1"
-                                  >
-                                    <span
-                                      className="text-foreground truncate flex-1"
-                                      title={model.displayName}
+                              {isExpanded && (
+                                <div className="mt-1.5 pl-2 border-l-2 border-primary/40 space-y-1 max-h-32 overflow-y-auto pr-1 animate-in fade-in duration-150">
+                                  {group.models.map((model) => (
+                                    <div
+                                      key={model.modelId}
+                                      className="flex items-center justify-between text-[10px] gap-1"
                                     >
-                                      {model.displayName}
-                                    </span>
-                                    <span className="text-[9px] text-muted-foreground shrink-0">
-                                      {model.status === 'Available' ? 'Ready' : model.status}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
+                                      <span
+                                        className="text-foreground truncate flex-1"
+                                        title={model.displayName}
+                                      >
+                                        {model.displayName}
+                                      </span>
+                                      <span className="text-[9px] text-muted-foreground shrink-0">
+                                        {model.status === 'Available' ? 'Ready' : model.status}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            /* Clean subtle spacer for individual models */
+                            <div className="h-5" aria-hidden="true" />
+                          )}
+                        </div>
                       </div>
                     );
                   })}
