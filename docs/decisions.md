@@ -295,6 +295,16 @@
 2. **Backend Registry Verification Gate:** Trong `execute_account_refresh`, sau khi tác vụ hoàn thành và giải phóng cờ `in_flight`, hệ thống kiểm tra `registry.get(&acc.account_id).await.is_none()`. Nếu tài khoản đã bị xóa khỏi registry, snapshot sẽ không được ghi đè vào cache `snapshots` và sự kiện `quota:account-updated` sẽ không được phát ra.
 3. **Diagnostic Target Invalidation:** Trong `handleRemoveAccount`, nếu tài khoản đang được chọn trong bảng chẩn đoán bị xóa, trạng thái `selectedDiagnosticAccountId` và `verificationResult` sẽ lập tức được làm rỗng.
 
+## Decision #36
+**Date:** 2026-08-16
+**Title:** Quota Subsystem Canonical Invariants & Release Freeze (AG-9.41)
+**Reason:** Thiết lập baseline hồi quy (regression baseline) chính thức và đóng băng subsystem AI Quota nhằm bảo vệ toàn bộ các bất biến kiến trúc (I1–I18) khỏi các thay đổi trong tương lai.
+**Alternative:** Không đóng băng baseline, dẫn tới rủi ro các phase phát triển tiếp theo vô tình làm hỏng logic auto-refresh, định danh tài khoản hoặc thứ tự deterministic.
+**Impact:**
+1. **Canonical Invariant Framework (I1–I18):** Đóng băng 18 bất biến kiến trúc phân tầng (Identity I1-I5, Ordering I6-I8, Provider Isolation I9-I10, Polling Engine I11-I13, Removal & Lifecycle I14-I18).
+2. **Subsystem Release Freeze:** Phân loại toàn bộ hệ thống AI Quota ở trạng thái `QUOTA_SUBSYSTEM_RELEASE_FROZEN`. Mọi thay đổi chức năng Quota trong tương lai bắt buộc phải chạy qua ma trận kiểm thử hồi quy AG-9.41.
+
+
 
 
 
