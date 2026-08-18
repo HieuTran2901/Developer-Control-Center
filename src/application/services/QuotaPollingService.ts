@@ -86,6 +86,20 @@ export class QuotaPollingService {
     });
   }
 
+  public async connectAntigravityAccount(accountId: string): Promise<AccountQuotaSnapshot> {
+    return await invoke<AccountQuotaSnapshot>('quota_connect_antigravity_account_cmd', {
+      accountId,
+    });
+  }
+
+  public async disconnectGoogleAccount(accountId: string): Promise<boolean> {
+    return await invoke<boolean>('quota_disconnect_google_account_cmd', { accountId });
+  }
+
+  public async getGoogleConnectionStatus(accountId: string): Promise<boolean> {
+    return await invoke<boolean>('quota_get_google_connection_status_cmd', { accountId });
+  }
+
   public async verifyAntigravityOAuthConfiguration(): Promise<AntigravityOAuthVerificationResult> {
     return await invoke<AntigravityOAuthVerificationResult>('verify_antigravity_oauth_configuration_cmd');
   }

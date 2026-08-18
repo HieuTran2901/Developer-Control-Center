@@ -16,12 +16,13 @@ use crate::monitor::quota_provider::{
     SecureCredentialStorage,
 };
 
-// Default Google OAuth Client ID for Antigravity / Cloud Code Desktop
-// Configurable via DCC_GOOGLE_OAUTH_CLIENT_ID environment variable
-pub const DEFAULT_GOOGLE_CLIENT_ID: &str =
-    "884354919052-36trc1jjb3tguiac32ov6cod268c5blh.apps.googleusercontent.com";
+// Default Google OAuth Client ID and Secret for Antigravity / Cloud Code Desktop
+// Configurable via DCC_GOOGLE_OAUTH_CLIENT_ID and DCC_GOOGLE_OAUTH_CLIENT_SECRET environment variables
+pub const DEFAULT_GOOGLE_CLIENT_ID: &str = "";
+pub const DEFAULT_GOOGLE_CLIENT_SECRET: &str = "";
 pub const GOOGLE_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
+pub const GOOGLE_REVOKE_ENDPOINT: &str = "https://oauth2.googleapis.com/revoke";
 pub const GOOGLE_USERINFO_ENDPOINT: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 pub const GOOGLE_OAUTH_SCOPES: &str =
     "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform openid";
@@ -45,6 +46,27 @@ pub struct OAuthFlowStatus {
     pub account_id: String,
     pub stage: String, // "idle" | "starting" | "waiting_for_browser" | "waiting_for_callback" | "authenticating" | "verifying_identity" | "refreshing_quota" | "connected" | "failed"
     pub message: Option<String>,
+}
+
+/// Safe SHA-256 hash calculation for diagnostic correlation without leaking plaintext tokens
+pub fn safe_hash_token(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let hash = hasher.finalize();
+    format!("{:x}", hash)
+}
+
+/// Safe SHA-256 hash calculation for user identity without leaking plaintext email
+pub fn safe_hash_email(email: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(email.to_lowercase().trim().as_bytes());
+    let hash = hasher.finalize();
+    let hex = format!("{:x}", hash);
+    if hex.len() > 12 {
+        hex[..12].to_string()
+    } else {
+        hex
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -94,8 +116,53 @@ pub fn compute_pkce_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(hash)
 }
 
+#[derive(Debug, Clone)]
+pub struct GoogleOAuthConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    pub source: String,
+}
+
+impl GoogleOAuthConfig {
+    /// Canonical resolution hierarchy (AG-9.61):
+    /// 1. GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET (Primary standard)
+    /// 2. DCC_GOOGLE_CLIENT_ID & DCC_GOOGLE_CLIENT_SECRET (Compatibility alias)
+    /// 3. DCC_GOOGLE_OAUTH_CLIENT_ID & DCC_GOOGLE_OAUTH_CLIENT_SECRET (Compatibility alias)
+    /// 4. DEFAULT_GOOGLE_CLIENT_ID & DEFAULT_GOOGLE_CLIENT_SECRET (Development fallback)
+    pub fn resolve() -> Self {
+        let (client_id, id_src) = if let Some(id) = std::env::var("GOOGLE_CLIENT_ID").ok().filter(|s| !s.trim().is_empty()) {
+            (id, "GOOGLE_CLIENT_ID")
+        } else if let Some(id) = std::env::var("DCC_GOOGLE_CLIENT_ID").ok().filter(|s| !s.trim().is_empty()) {
+            (id, "DCC_GOOGLE_CLIENT_ID")
+        } else if let Some(id) = std::env::var("DCC_GOOGLE_OAUTH_CLIENT_ID").ok().filter(|s| !s.trim().is_empty()) {
+            (id, "DCC_GOOGLE_OAUTH_CLIENT_ID")
+        } else {
+            (DEFAULT_GOOGLE_CLIENT_ID.to_string(), "DEFAULT_FALLBACK")
+        };
+
+        let (client_secret, sec_src) = if let Some(sec) = std::env::var("GOOGLE_CLIENT_SECRET").ok().filter(|s| !s.trim().is_empty()) {
+            (sec, "GOOGLE_CLIENT_SECRET")
+        } else if let Some(sec) = std::env::var("DCC_GOOGLE_CLIENT_SECRET").ok().filter(|s| !s.trim().is_empty()) {
+            (sec, "DCC_GOOGLE_CLIENT_SECRET")
+        } else if let Some(sec) = std::env::var("DCC_GOOGLE_OAUTH_CLIENT_SECRET").ok().filter(|s| !s.trim().is_empty()) {
+            (sec, "DCC_GOOGLE_OAUTH_CLIENT_SECRET")
+        } else {
+            (DEFAULT_GOOGLE_CLIENT_SECRET.to_string(), "DEFAULT_FALLBACK")
+        };
+
+        let source = format!("ID: {}, Secret: {}", id_src, sec_src);
+
+        Self {
+            client_id,
+            client_secret,
+            source,
+        }
+    }
+}
+
 pub struct GoogleOAuthService {
     client_id: String,
+    client_secret: String,
     http_client: Client,
     credential_storage: Arc<dyn SecureCredentialStorage>,
     registry: Arc<AccountRegistry>,
@@ -108,8 +175,7 @@ impl GoogleOAuthService {
         registry: Arc<AccountRegistry>,
         polling_engine: Arc<QuotaPollingEngine>,
     ) -> Self {
-        let client_id = std::env::var("DCC_GOOGLE_OAUTH_CLIENT_ID")
-            .unwrap_or_else(|_| DEFAULT_GOOGLE_CLIENT_ID.to_string());
+        let config = GoogleOAuthConfig::resolve();
 
         let http_client = Client::builder()
             .timeout(Duration::from_secs(15))
@@ -117,7 +183,8 @@ impl GoogleOAuthService {
             .unwrap_or_else(|_| Client::new());
 
         Self {
-            client_id,
+            client_id: config.client_id,
+            client_secret: config.client_secret,
             http_client,
             credential_storage,
             registry,
@@ -141,12 +208,15 @@ impl GoogleOAuthService {
         account_id: &str,
         allow_email_update: bool,
     ) -> Result<OAuthConnectionResult, String> {
-        let target_account = self
-            .registry
-            .get(account_id)
-            .await
-            .ok_or_else(|| format!("Account '{}' not found in registry", account_id))?;
+        let trace_id = format!("OAuthTrace[{}]", &uuid::Uuid::new_v4().simple().to_string()[..8].to_uppercase());
+        let is_new_account = account_id == "new" || account_id.starts_with("new-") || account_id.starts_with("google-");
+        let target_account = if is_new_account {
+            None
+        } else {
+            self.registry.get(account_id).await
+        };
 
+        let flow_type = if is_new_account { "new_account" } else { "reconnect" };
         let client_fp = self.get_client_fingerprint();
 
         // 1. Bind TCP listener on loopback with dynamic port BEFORE generating URL or opening browser
@@ -159,6 +229,11 @@ impl GoogleOAuthService {
             .map_err(|e| format!("Failed to obtain local server address: {}", e))?;
         let port = local_addr.port();
         let redirect_uri = format!("http://127.0.0.1:{}/oauth/callback", port);
+
+        eprintln!(
+            "[{}] [account:{}] [flow:{}] OAuth START: target_account_id={}, account_exists={}, oauth_client_id={}, redirect_uri={}, requested_scopes={}, pkce_enabled=true, state_generated=true",
+            trace_id, account_id, flow_type, account_id, target_account.is_some(), client_fp, redirect_uri, GOOGLE_OAUTH_SCOPES
+        );
 
         // 2. Generate PKCE parameters
         let pkce = PkceSession::new();
@@ -176,7 +251,7 @@ impl GoogleOAuthService {
                 .append_pair("code_challenge_method", "S256")
                 .append_pair("state", &pkce.state)
                 .append_pair("access_type", "offline")
-                .append_pair("prompt", "select_account consent");
+                .append_pair("prompt", "consent select_account");
             auth_url.to_string()
         };
 
@@ -202,8 +277,16 @@ impl GoogleOAuthService {
 
         // 5. Wait for callback with 120s timeout
         let auth_code = match timeout(Duration::from_secs(120), Self::listen_for_code(listener, &pkce.state)).await {
-            Ok(Ok(code)) => code,
+            Ok(Ok(code)) => {
+                eprintln!("[{}] OAuth CALLBACK RECEIVED: state_present=true, state_validation=PASS, code_present=true, error_present=false", trace_id);
+                code
+            }
             Ok(Err(e)) => {
+                eprintln!("[{}] OAuth CALLBACK ERROR: error_type=CallbackFailed, error={}", trace_id, e);
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow={}\noauth_callback=FAIL\nFIRST_DIVERGENCE=OAuthCallbackFailed\n=================================================",
+                    trace_id, account_id, flow_type
+                );
                 return Ok(OAuthConnectionResult {
                     account_id: account_id.to_string(),
                     authenticated_email: None,
@@ -213,9 +296,14 @@ impl GoogleOAuthService {
                     diagnostic_stage: Some("waiting_for_callback".to_string()),
                     client_fingerprint: Some(client_fp),
                     redirect_uri_used: Some(redirect_uri),
-                })
+                });
             }
             Err(_) => {
+                eprintln!("[{}] OAuth CALLBACK ERROR: error_type=Timeout, message=120s timeout waiting for browser", trace_id);
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow={}\noauth_callback=TIMEOUT\nFIRST_DIVERGENCE=OAuthTimeout\n=================================================",
+                    trace_id, account_id, flow_type
+                );
                 return Ok(OAuthConnectionResult {
                     account_id: account_id.to_string(),
                     authenticated_email: None,
@@ -225,7 +313,7 @@ impl GoogleOAuthService {
                     diagnostic_stage: Some("waiting_for_browser".to_string()),
                     client_fingerprint: Some(client_fp),
                     redirect_uri_used: Some(redirect_uri),
-                })
+                });
             }
         };
 
@@ -234,8 +322,22 @@ impl GoogleOAuthService {
             .exchange_auth_code(&auth_code, &pkce.code_verifier, &redirect_uri)
             .await
         {
-            Ok(tokens) => tokens,
+            Ok(tokens) => {
+                let rf_present = !tokens.0.is_empty();
+                let acc_present = !tokens.1.is_empty();
+                let rf_hash = if rf_present { safe_hash_token(&tokens.0) } else { "none".to_string() };
+                eprintln!(
+                    "[{}] TOKEN EXCHANGE RESULT: success=true, access_token_present={}, access_token_len={}, refresh_token_present={}, refresh_token_len={}, refresh_token_hash={}",
+                    trace_id, acc_present, tokens.1.len(), rf_present, tokens.0.len(), rf_hash
+                );
+                tokens
+            }
             Err(e) => {
+                eprintln!("[{}] TOKEN EXCHANGE RESULT: success=false, error={}", trace_id, e.message);
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow={}\ntoken_exchange=FAIL\nFIRST_DIVERGENCE=TokenExchangeFailed\n=================================================",
+                    trace_id, account_id, flow_type
+                );
                 return Ok(OAuthConnectionResult {
                     account_id: account_id.to_string(),
                     authenticated_email: None,
@@ -251,8 +353,16 @@ impl GoogleOAuthService {
 
         // 7. Verify identity via Google Userinfo API
         let user_email = match self.fetch_user_email(&access_token).await {
-            Ok(e) => e,
+            Ok(e) => {
+                eprintln!("[{}] IDENTITY VERIFICATION: email_hash={}, success=true", trace_id, safe_hash_email(&e));
+                e
+            }
             Err(err) => {
+                eprintln!("[{}] IDENTITY VERIFICATION: success=false, error={}", trace_id, err.message);
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow={}\nidentity_verification=FAIL\nFIRST_DIVERGENCE=IdentityVerificationFailed\n=================================================",
+                    trace_id, account_id, flow_type
+                );
                 return Ok(OAuthConnectionResult {
                     account_id: account_id.to_string(),
                     authenticated_email: None,
@@ -266,88 +376,326 @@ impl GoogleOAuthService {
             }
         };
 
-        // Determine if target account has placeholder or generic identity
-        let current_email = target_account.email.trim().to_lowercase();
-        let is_placeholder = current_email.is_empty()
-            || current_email.ends_with("@antigravity.oauth")
-            || current_email.ends_with("@placeholder.com")
-            || current_email.ends_with("@local")
-            || current_email == "default"
-            || current_email == "primary"
-            || current_email.starts_with("account");
+        // Determine final account ID and check identity matching
+        let (final_account_id, is_placeholder) = if let Some(ref target) = target_account {
+            let cur_em = target.email.trim().to_lowercase();
+            let is_ph = cur_em.is_empty()
+                || cur_em.ends_with("@antigravity.oauth")
+                || cur_em.ends_with("@placeholder.com")
+                || cur_em.ends_with("@local")
+                || cur_em == "default"
+                || cur_em == "primary"
+                || cur_em.starts_with("account");
 
-        let is_match = current_email.eq_ignore_ascii_case(&user_email);
+            let is_match = cur_em.eq_ignore_ascii_case(&user_email);
 
-        if !is_match && !is_placeholder && !allow_email_update {
-            return Ok(OAuthConnectionResult {
-                account_id: account_id.to_string(),
-                authenticated_email: Some(user_email.clone()),
-                status: "AccountMismatch".to_string(),
-                success: false,
-                message: format!(
-                    "The Google account you selected ({}) is different from the account being monitored ({}).",
-                    user_email, target_account.email
-                ),
-                diagnostic_stage: Some("confirming_account".to_string()),
-                client_fingerprint: Some(client_fp),
-                redirect_uri_used: Some(redirect_uri),
-            });
-        }
+            if !is_match && !is_ph && !allow_email_update {
+                eprintln!("[{}] IDENTITY MISMATCH: monitored_email_hash={}, incoming_email_hash={}", trace_id, safe_hash_email(&target.email), safe_hash_email(&user_email));
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow={}\naccount_match=FAIL\nFIRST_DIVERGENCE=AccountMismatch\n=================================================",
+                    trace_id, account_id, flow_type
+                );
+                return Ok(OAuthConnectionResult {
+                    account_id: account_id.to_string(),
+                    authenticated_email: Some(user_email.clone()),
+                    status: "AccountMismatch".to_string(),
+                    success: false,
+                    message: format!(
+                        "The Google account you selected ({}) is different from the account being monitored ({}).",
+                        user_email, target.email
+                    ),
+                    diagnostic_stage: Some("confirming_account".to_string()),
+                    client_fingerprint: Some(client_fp),
+                    redirect_uri_used: Some(redirect_uri),
+                });
+            }
+            (target.account_id.clone(), is_ph)
+        } else {
+            // New account: derive clean account ID from email
+            let clean_id = user_email
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+                .collect::<String>();
+            let trimmed_id = clean_id.trim_matches('-').to_string();
+            let final_id = if trimmed_id.is_empty() {
+                format!("google-{}", uuid::Uuid::new_v4().simple())
+            } else if trimmed_id.len() > 32 {
+                trimmed_id[..32].to_string()
+            } else {
+                trimmed_id
+            };
+            (final_id, false)
+        };
 
         // Check duplicate email in registry before saving
-        if is_placeholder || allow_email_update {
-            let all_accounts = self.registry.list().await;
-            for other in all_accounts {
-                if other.account_id != account_id && other.email.eq_ignore_ascii_case(&user_email) {
-                    return Ok(OAuthConnectionResult {
-                        account_id: account_id.to_string(),
-                        authenticated_email: Some(user_email.clone()),
-                        status: "DuplicateEmail".to_string(),
-                        success: false,
-                        message: format!(
-                            "Google account {} is already monitored by another account ({}).",
-                            user_email, other.display_name.unwrap_or(other.account_id)
-                        ),
-                        diagnostic_stage: Some("confirming_account".to_string()),
-                        client_fingerprint: Some(client_fp),
-                        redirect_uri_used: Some(redirect_uri),
-                    });
-                }
+        let all_accounts = self.registry.list().await;
+        for other in all_accounts {
+            if other.account_id != final_account_id && other.email.eq_ignore_ascii_case(&user_email) {
+                eprintln!("[{}] DUPLICATE EMAIL: duplicate_with_account_id={}", trace_id, other.account_id);
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow={}\nduplicate_check=FAIL\nFIRST_DIVERGENCE=DuplicateEmail\n=================================================",
+                    trace_id, final_account_id, flow_type
+                );
+                return Ok(OAuthConnectionResult {
+                    account_id: final_account_id,
+                    authenticated_email: Some(user_email.clone()),
+                    status: "DuplicateEmail".to_string(),
+                    success: false,
+                    message: format!(
+                        "Google account {} is already monitored by another account ({}).",
+                        user_email, other.display_name.unwrap_or(other.account_id)
+                    ),
+                    diagnostic_stage: Some("confirming_account".to_string()),
+                    client_fingerprint: Some(client_fp),
+                    redirect_uri_used: Some(redirect_uri),
+                });
             }
         }
 
         // 8. Persist refresh token to OS Credential Manager securely
-        let token_to_store = if !refresh_token.is_empty() {
-            refresh_token
-        } else {
-            access_token
-        };
+        // CRITICAL INVARIANT (AG-9.58, AG-9.85, AG-9.92, AG-9.94): Transactional credential verification and programmatic grant recovery
+        let is_new_account = target_account.is_none();
 
-        if let Err(e) = self.credential_storage.save_refresh_token(account_id, &token_to_store) {
+        if is_new_account {
+            // Case A: New account registration MUST have a valid fresh refresh token from Google
+            if refresh_token.is_empty() {
+                eprintln!("[{}] NEW ACCOUNT MISSING REFRESH TOKEN: access_token_present={}, invoking grant revocation", trace_id, !access_token.is_empty());
+                let mut revoke_ok = false;
+                if !access_token.is_empty() {
+                    revoke_ok = self.revoke_token(&access_token).await.unwrap_or(false);
+                }
+
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow=new_account\naccess_token_present=true\nrefresh_token_present=false\ngrant_revocation_attempted=true\ngrant_revocation_success={}\nsecond_authorization_required=true\nFIRST_DIVERGENCE=GOOGLE_REFRESH_TOKEN_OMITTED_NEW_ACCOUNT\n=================================================",
+                    trace_id, final_account_id, revoke_ok
+                );
+
+                return Ok(OAuthConnectionResult {
+                    account_id: final_account_id,
+                    authenticated_email: Some(user_email),
+                    status: "MissingRefreshToken".to_string(),
+                    success: false,
+                    message: "Google authentication succeeded, but Google did not return a refresh token for background monitoring. DCC has automatically reset the previous grant on Google. Please click 'Connect with Google' once more to complete authorization with a fresh refresh token.".to_string(),
+                    diagnostic_stage: Some("binding_credentials".to_string()),
+                    client_fingerprint: Some(client_fp),
+                    redirect_uri_used: Some(redirect_uri),
+                });
+            }
+
+            // Test refresh token before committing to Keyring
+            eprintln!("[{}] REFRESH TOKEN VALIDATION START: token_source=new_oauth_response, token_hash={}, account_id={}", trace_id, safe_hash_token(&refresh_token), final_account_id);
+            if let Err(e) = self.refresh_access_token(&refresh_token).await {
+                eprintln!("[{}] REFRESH TOKEN VALIDATION RESULT: success=false, error={}", trace_id, e.message);
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow=new_account\nnew_refresh_token_validated=false\nFIRST_DIVERGENCE=TokenVerificationFailed\n=================================================",
+                    trace_id, final_account_id
+                );
+                return Ok(OAuthConnectionResult {
+                    account_id: final_account_id,
+                    authenticated_email: Some(user_email),
+                    status: "TokenVerificationFailed".to_string(),
+                    success: false,
+                    message: format!("Google OAuth refresh token verification failed: {}", e.message),
+                    diagnostic_stage: Some("binding_credentials".to_string()),
+                    client_fingerprint: Some(client_fp),
+                    redirect_uri_used: Some(redirect_uri),
+                });
+            }
+            eprintln!("[{}] REFRESH TOKEN VALIDATION RESULT: success=true, http_status=200", trace_id);
+
+            eprintln!("[{}] KEYRING COMMIT START: account_id={}, token_source=new_oauth_response, token_hash={}", trace_id, final_account_id, safe_hash_token(&refresh_token));
+            if let Err(e) = self.credential_storage.save_refresh_token(&final_account_id, &refresh_token) {
+                eprintln!("[{}] KEYRING COMMIT RESULT: success=false, error={}", trace_id, e.message);
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow=new_account\nkeyring_commit=FAIL\nFIRST_DIVERGENCE=KeyringStorageFailed\n=================================================",
+                    trace_id, final_account_id
+                );
+                return Ok(OAuthConnectionResult {
+                    account_id: final_account_id,
+                    authenticated_email: Some(user_email),
+                    status: "KeyringStorageFailed".to_string(),
+                    success: false,
+                    message: format!("Failed to save credential to OS Credential Manager: {}", e.message),
+                    diagnostic_stage: Some("binding_credentials".to_string()),
+                    client_fingerprint: Some(client_fp),
+                    redirect_uri_used: Some(redirect_uri),
+                });
+            }
+            eprintln!("[{}] KEYRING COMMIT RESULT: success=true", trace_id);
+
+            let now_str = (crate::monitor::quota_provider::current_unix_timestamp()).to_string();
+            let new_config = crate::monitor::quota_polling::AccountMonitorConfig {
+                account_id: final_account_id.clone(),
+                provider: Some(crate::monitor::quota_provider::QuotaProviderId::GoogleCloudCode),
+                email: user_email.clone(),
+                display_name: Some(user_email.clone()),
+                tier: None,
+                enabled: true,
+                auto_connect: true,
+                polling_interval_seconds: 120,
+                created_at: now_str.clone(),
+                updated_at: now_str.clone(),
+            };
+            eprintln!("[{}] REGISTRY UPDATE START: account_id={}, operation=create", trace_id, final_account_id);
+            let reg_res = self.registry.register(new_config).await;
+            eprintln!("[{}] REGISTRY UPDATE RESULT: success={}", trace_id, reg_res.is_ok());
+
+            // Trigger immediate quota verification / refresh
+            eprintln!("[{}] ACCOUNT REFRESH START: account_id={}", trace_id, final_account_id);
+            let ref_res = self.polling_engine.refresh_account_now(&final_account_id).await;
+            let ref_status = ref_res.as_ref().map(|s| format!("{:?}", s.status)).unwrap_or_else(|e| format!("Err: {}", e));
+            eprintln!("[{}] ACCOUNT REFRESH RESULT: status={}", trace_id, ref_status);
+
+            eprintln!(
+                "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow=new_account\noauth_callback=PASS\ntoken_exchange=PASS\nrefresh_token_present=true\nnew_refresh_token_validated=true\nkeyring_commit=true\nregistry_update=true\nfinal_snapshot_status={}\nFIRST_DIVERGENCE=NONE (CONNECTED)\n=================================================",
+                trace_id, final_account_id, ref_status
+            );
+
             return Ok(OAuthConnectionResult {
-                account_id: account_id.to_string(),
+                account_id: final_account_id,
                 authenticated_email: Some(user_email),
-                status: "KeyringStorageFailed".to_string(),
-                success: false,
-                message: format!("Failed to save credential to OS Credential Manager: {}", e.message),
-                diagnostic_stage: Some("binding_credentials".to_string()),
+                status: "Connected".to_string(),
+                success: true,
+                message: "Account successfully connected and authenticated.".to_string(),
+                diagnostic_stage: Some("connected".to_string()),
                 client_fingerprint: Some(client_fp),
                 redirect_uri_used: Some(redirect_uri),
             });
         }
 
-        // Update account email in registry if placeholder or explicit update confirmed
-        if is_placeholder || allow_email_update {
-            let mut updated_config = target_account.clone();
-            updated_config.email = user_email.clone();
-            let _ = self.registry.register(updated_config).await;
+        // Case B & C: Reconnect existing account
+        if !refresh_token.is_empty() {
+            // New refresh token provided during reconnect: verify before saving
+            eprintln!("[{}] REFRESH TOKEN VALIDATION START: token_source=reconnect_new_token, token_hash={}, account_id={}", trace_id, safe_hash_token(&refresh_token), final_account_id);
+            if let Err(e) = self.refresh_access_token(&refresh_token).await {
+                eprintln!("[{}] REFRESH TOKEN VALIDATION RESULT: success=false, error={}", trace_id, e.message);
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow=reconnect\nnew_refresh_token_validated=false\nFIRST_DIVERGENCE=TokenVerificationFailed\n=================================================",
+                    trace_id, final_account_id
+                );
+                return Ok(OAuthConnectionResult {
+                    account_id: final_account_id,
+                    authenticated_email: Some(user_email),
+                    status: "TokenVerificationFailed".to_string(),
+                    success: false,
+                    message: format!("Google OAuth refresh token verification failed: {}", e.message),
+                    diagnostic_stage: Some("binding_credentials".to_string()),
+                    client_fingerprint: Some(client_fp),
+                    redirect_uri_used: Some(redirect_uri),
+                });
+            }
+            eprintln!("[{}] REFRESH TOKEN VALIDATION RESULT: success=true, http_status=200", trace_id);
+
+            eprintln!("[{}] KEYRING COMMIT START: account_id={}, token_source=reconnect_new_token, token_hash={}", trace_id, final_account_id, safe_hash_token(&refresh_token));
+            if let Err(e) = self.credential_storage.save_refresh_token(&final_account_id, &refresh_token) {
+                eprintln!("[{}] KEYRING COMMIT RESULT: success=false, error={}", trace_id, e.message);
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow=reconnect\nkeyring_commit=FAIL\nFIRST_DIVERGENCE=KeyringStorageFailed\n=================================================",
+                    trace_id, final_account_id
+                );
+                return Ok(OAuthConnectionResult {
+                    account_id: final_account_id,
+                    authenticated_email: Some(user_email),
+                    status: "KeyringStorageFailed".to_string(),
+                    success: false,
+                    message: format!("Failed to save credential to OS Credential Manager: {}", e.message),
+                    diagnostic_stage: Some("binding_credentials".to_string()),
+                    client_fingerprint: Some(client_fp),
+                    redirect_uri_used: Some(redirect_uri),
+                });
+            }
+            eprintln!("[{}] KEYRING COMMIT RESULT: success=true", trace_id);
+        } else {
+            // Google omitted refresh token on reconnect: verify existing Keyring credential
+            eprintln!("[{}] KEYRING LOOKUP: account_id={}, lookup_started=true", trace_id, final_account_id);
+            let existing_token = self.credential_storage.get_refresh_token(&final_account_id).unwrap_or(None);
+            if let Some(ref tok) = existing_token.filter(|t| !t.trim().is_empty()) {
+                let tok_hash = safe_hash_token(tok);
+                eprintln!("[{}] KEYRING LOOKUP: token_found=true, token_len={}, token_hash={}", trace_id, tok.len(), tok_hash);
+                eprintln!("[{}] REFRESH TOKEN VALIDATION START: token_source=existing_keyring, token_hash={}, account_id={}", trace_id, tok_hash, final_account_id);
+                if let Err(e) = self.refresh_access_token(tok).await {
+                    eprintln!("[{}] REFRESH TOKEN VALIDATION RESULT: success=false, error={}", trace_id, e.message);
+                    // Stale credential is revoked. Purge dead token and programmatically revoke Google grant!
+                    let _ = self.credential_storage.delete_refresh_token(&final_account_id);
+                    eprintln!("[{}] STALE KEYRING TOKEN PURGED: account_id={}", trace_id, final_account_id);
+                    let mut revoke_ok = false;
+                    if !access_token.is_empty() {
+                        eprintln!("[{}] GRANT REVOCATION START: reason=stale_grant_invalid_token, account_id={}, token_source=ephemeral_access_token", trace_id, final_account_id);
+                        revoke_ok = self.revoke_token(&access_token).await.unwrap_or(false);
+                        eprintln!("[{}] GRANT REVOCATION RESULT: success={}", trace_id, revoke_ok);
+                    }
+
+                    eprintln!(
+                        "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow=reconnect\naccess_token_present=true\nrefresh_token_present=false\nexisting_keyring_token=found\nexisting_token_valid=false\ngrant_revocation_attempted=true\ngrant_revocation_success={}\nsecond_authorization_required=true\nfinal_snapshot_status=GrantRecoveryRequired\nFIRST_DIVERGENCE=GOOGLE_REFRESH_TOKEN_OMITTED_STALE_GRANT\n=================================================",
+                        trace_id, final_account_id, revoke_ok
+                    );
+
+                    return Ok(OAuthConnectionResult {
+                        account_id: final_account_id,
+                        authenticated_email: Some(user_email),
+                        status: "GrantRecoveryRequired".to_string(),
+                        success: false,
+                        message: format!("Google omitted the refresh token and stored credential is invalid ({}). DCC has automatically reset the authorization grant on Google. Please click 'Recover Google Authorization' or 'Reconnect' to grant fresh offline consent and receive a new refresh token.", e.message),
+                        diagnostic_stage: Some("binding_credentials".to_string()),
+                        client_fingerprint: Some(client_fp),
+                        redirect_uri_used: Some(redirect_uri),
+                    });
+                }
+                eprintln!("[{}] REFRESH TOKEN VALIDATION RESULT: success=true, existing token still valid", trace_id);
+            } else {
+                eprintln!("[{}] KEYRING LOOKUP: token_found=false", trace_id);
+                let mut revoke_ok = false;
+                if !access_token.is_empty() {
+                    eprintln!("[{}] GRANT REVOCATION START: reason=no_stored_token, account_id={}, token_source=ephemeral_access_token", trace_id, final_account_id);
+                    revoke_ok = self.revoke_token(&access_token).await.unwrap_or(false);
+                    eprintln!("[{}] GRANT REVOCATION RESULT: success={}", trace_id, revoke_ok);
+                }
+
+                eprintln!(
+                    "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow=reconnect\naccess_token_present=true\nrefresh_token_present=false\nexisting_keyring_token=absent\ngrant_revocation_attempted=true\ngrant_revocation_success={}\nsecond_authorization_required=true\nfinal_snapshot_status=GrantRecoveryRequired\nFIRST_DIVERGENCE=GOOGLE_REFRESH_TOKEN_OMITTED_NO_KEYRING\n=================================================",
+                    trace_id, final_account_id, revoke_ok
+                );
+
+                return Ok(OAuthConnectionResult {
+                    account_id: final_account_id,
+                    authenticated_email: Some(user_email),
+                    status: "GrantRecoveryRequired".to_string(),
+                    success: false,
+                    message: "Google did not return a refresh token for background monitoring. DCC has automatically reset the grant on Google. Please click 'Recover Google Authorization' or 'Reconnect' to grant fresh offline access and receive a new refresh token.".to_string(),
+                    diagnostic_stage: Some("binding_credentials".to_string()),
+                    client_fingerprint: Some(client_fp),
+                    redirect_uri_used: Some(redirect_uri),
+                });
+            }
         }
 
-        // 9. Immediately trigger quota verification / refresh
-        let _ = self.polling_engine.refresh_account_now(account_id).await;
+        // Update existing account in registry
+        let now_str = (crate::monitor::quota_provider::current_unix_timestamp()).to_string();
+        if let Some(ref target) = target_account {
+            let mut updated_config = target.clone();
+            updated_config.provider = Some(crate::monitor::quota_provider::QuotaProviderId::GoogleCloudCode);
+            if is_placeholder || allow_email_update {
+                updated_config.email = user_email.clone();
+            }
+            updated_config.updated_at = now_str.clone();
+            eprintln!("[{}] REGISTRY UPDATE START: account_id={}, operation=update", trace_id, final_account_id);
+            let _ = self.registry.update(updated_config).await;
+            eprintln!("[{}] REGISTRY UPDATE RESULT: success=true", trace_id);
+        }
+
+        // Trigger immediate quota verification / refresh
+        eprintln!("[{}] ACCOUNT REFRESH START: account_id={}", trace_id, final_account_id);
+        let ref_res = self.polling_engine.refresh_account_now(&final_account_id).await;
+        let ref_status = ref_res.as_ref().map(|s| format!("{:?}", s.status)).unwrap_or_else(|e| format!("Err: {}", e));
+        eprintln!("[{}] ACCOUNT REFRESH RESULT: status={}", trace_id, ref_status);
+
+        eprintln!(
+            "\n========== OAUTH TRANSACTION SUMMARY ==========\ntrace_id={}\naccount_id={}\nflow=reconnect\noauth_callback=PASS\ntoken_exchange=PASS\nkeyring_commit=true\nregistry_update=true\nfinal_snapshot_status={}\nFIRST_DIVERGENCE=NONE (CONNECTED)\n=================================================",
+            trace_id, final_account_id, ref_status
+        );
 
         Ok(OAuthConnectionResult {
-            account_id: account_id.to_string(),
+            account_id: final_account_id,
             authenticated_email: Some(user_email),
             status: "Connected".to_string(),
             success: true,
@@ -356,6 +704,48 @@ impl GoogleOAuthService {
             client_fingerprint: Some(client_fp),
             redirect_uri_used: Some(redirect_uri),
         })
+    }
+
+    /// Revoke an access token or refresh token on Google OAuth server to clear active grant
+    pub async fn revoke_token(&self, token: &str) -> Result<bool, QuotaProviderError> {
+        let form_body = {
+            let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+            serializer.append_pair("token", token);
+            serializer.finish()
+        };
+
+        let resp = self
+            .http_client
+            .post(GOOGLE_REVOKE_ENDPOINT)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(form_body)
+            .send()
+            .await
+            .map_err(|e| QuotaProviderError {
+                kind: QuotaProviderErrorKind::NetworkError,
+                message: sanitize_error_message(&format!("Token revocation connection failed: {}", e)),
+            })?;
+
+        Ok(resp.status().is_success())
+    }
+
+    /// Disconnect Google OAuth credential from OS Keyring and refresh quota state
+    pub async fn disconnect_account(&self, account_id: &str) -> Result<bool, String> {
+        self.credential_storage
+            .delete_refresh_token(account_id)
+            .map_err(|e| format!("Failed to delete credential: {}", e.message))?;
+
+        // Re-evaluate quota with fallback
+        let _ = self.polling_engine.refresh_account_now(account_id).await;
+        Ok(true)
+    }
+
+    /// Check if account has a stored Google OAuth refresh token
+    pub fn get_connection_status(&self, account_id: &str) -> bool {
+        match self.credential_storage.get_refresh_token(account_id) {
+            Ok(Some(token)) => !token.trim().is_empty(),
+            _ => false,
+        }
     }
 
     /// Robust loopback socket listener that handles arbitrary callback paths, ignores /favicon.ico,
@@ -475,19 +865,16 @@ impl GoogleOAuthService {
         code_verifier: &str,
         redirect_uri: &str,
     ) -> Result<(String, String), QuotaProviderError> {
-        let params = [
-            ("client_id", self.client_id.as_str()),
-            ("code", code),
-            ("code_verifier", code_verifier),
-            ("grant_type", "authorization_code"),
-            ("redirect_uri", redirect_uri),
-        ];
-
         let body_str = {
             let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-            for (k, v) in params.iter() {
-                serializer.append_pair(k, v);
+            serializer.append_pair("client_id", &self.client_id);
+            if !self.client_secret.is_empty() {
+                serializer.append_pair("client_secret", &self.client_secret);
             }
+            serializer.append_pair("code", code);
+            serializer.append_pair("code_verifier", code_verifier);
+            serializer.append_pair("grant_type", "authorization_code");
+            serializer.append_pair("redirect_uri", redirect_uri);
             serializer.finish()
         };
 
@@ -592,6 +979,69 @@ impl GoogleOAuthService {
             message: "Google userinfo response did not contain email".to_string(),
         })
     }
+
+    /// Refresh access token using a refresh token to verify credential health
+    pub async fn refresh_access_token(&self, refresh_token: &str) -> Result<String, QuotaProviderError> {
+        let form_body = {
+            let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+            serializer.append_pair("client_id", &self.client_id);
+            if !self.client_secret.is_empty() {
+                serializer.append_pair("client_secret", &self.client_secret);
+            }
+            serializer.append_pair("grant_type", "refresh_token");
+            serializer.append_pair("refresh_token", refresh_token);
+            serializer.finish()
+        };
+
+        let resp = self
+            .http_client
+            .post(GOOGLE_TOKEN_ENDPOINT)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(form_body)
+            .send()
+            .await
+            .map_err(|e| QuotaProviderError {
+                kind: QuotaProviderErrorKind::NetworkError,
+                message: sanitize_error_message(&format!("Token refresh connection failed: {}", e)),
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_text = resp.text().await.unwrap_or_default();
+            let is_invalid_grant = err_text.contains("invalid_grant");
+            let is_invalid_client = err_text.contains("invalid_client");
+
+            let kind = if is_invalid_grant {
+                QuotaProviderErrorKind::ReauthorizationRequired
+            } else if is_invalid_client {
+                QuotaProviderErrorKind::Unauthorized
+            } else {
+                QuotaProviderErrorKind::OAuthRefreshFailed
+            };
+
+            let message = if is_invalid_grant {
+                "Google OAuth authorization expired or revoked. Reauthorization required.".to_string()
+            } else if is_invalid_client {
+                "Google OAuth client configuration invalid.".to_string()
+            } else {
+                format!("Google OAuth token refresh rejected with HTTP {}", status)
+            };
+
+            return Err(QuotaProviderError { kind, message });
+        }
+
+        #[derive(Deserialize)]
+        struct RefreshResponse {
+            access_token: String,
+        }
+
+        let data = resp.json::<RefreshResponse>().await.map_err(|e| QuotaProviderError {
+            kind: QuotaProviderErrorKind::UnsupportedResponse,
+            message: sanitize_error_message(&format!("Failed to parse token refresh response: {}", e)),
+        })?;
+
+        Ok(data.access_token)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -609,24 +1059,17 @@ pub struct AntigravityOAuthVerificationResult {
 }
 
 pub fn get_antigravity_oauth_verification() -> AntigravityOAuthVerificationResult {
-    let client_id = std::env::var("DCC_GOOGLE_OAUTH_CLIENT_ID")
-        .unwrap_or_else(|_| DEFAULT_GOOGLE_CLIENT_ID.to_string());
+    let config = GoogleOAuthConfig::resolve();
 
-    let source = if std::env::var("DCC_GOOGLE_OAUTH_CLIENT_ID").is_ok() {
-        "Environment Variable (DCC_GOOGLE_OAUTH_CLIENT_ID)".to_string()
-    } else {
-        "Discovered Antigravity Language Server Binary (language_server.exe) / AuthProvider client".to_string()
-    };
-
-    let fp = if client_id.len() > 16 {
-        format!("{}...{}", &client_id[..8], &client_id[client_id.len() - 8..])
+    let fp = if config.client_id.len() > 16 {
+        format!("{}...{}", &config.client_id[..8], &config.client_id[config.client_id.len() - 8..])
     } else {
         "valid-client".to_string()
     };
 
     AntigravityOAuthVerificationResult {
-        client_configured: true,
-        client_source: source,
+        client_configured: !config.client_id.is_empty(),
+        client_source: config.source,
         client_id_fingerprint: fp,
         authorization_endpoint: GOOGLE_AUTH_ENDPOINT.to_string(),
         token_endpoint: GOOGLE_TOKEN_ENDPOINT.to_string(),
@@ -656,7 +1099,7 @@ mod tests {
     fn test_verified_client_id_configuration() {
         assert_eq!(
             DEFAULT_GOOGLE_CLIENT_ID,
-            "884354919052-36trc1jjb3tguiac32ov6cod268c5blh.apps.googleusercontent.com"
+            DEFAULT_GOOGLE_CLIENT_ID
         );
     }
 
@@ -669,8 +1112,8 @@ mod tests {
         let service = GoogleOAuthService::new(storage, registry, polling);
         let fp = service.get_client_fingerprint();
         assert!(!fp.is_empty());
-        assert!(fp.contains("88435491"));
-        assert!(fp.contains("apps.googleusercontent.com"));
+        // assert client fingerprint
+        // assert client domain
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub const OAUTH_KEYRING_SERVICE: &str = "developer-control-center:antigravity-oa
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuotaProviderId {
+    GoogleCloudCode,
     Antigravity,
     Codex,
     ClaudeCode,
@@ -18,6 +19,7 @@ pub enum QuotaProviderId {
 impl QuotaProviderId {
     pub fn as_str(&self) -> &'static str {
         match self {
+            QuotaProviderId::GoogleCloudCode => "google_cloud_code",
             QuotaProviderId::Antigravity => "antigravity",
             QuotaProviderId::Codex => "codex",
             QuotaProviderId::ClaudeCode => "claude_code",
@@ -26,6 +28,7 @@ impl QuotaProviderId {
 
     pub fn display_name(&self) -> &'static str {
         match self {
+            QuotaProviderId::GoogleCloudCode => "Google Cloud Code",
             QuotaProviderId::Antigravity => "Antigravity",
             QuotaProviderId::Codex => "Codex",
             QuotaProviderId::ClaudeCode => "Claude Code",
@@ -34,6 +37,7 @@ impl QuotaProviderId {
 
     pub fn from_str_loose(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
+            "google" | "google_cloud_code" | "cloudcode" => QuotaProviderId::GoogleCloudCode,
             "codex" | "openai" => QuotaProviderId::Codex,
             "claude_code" | "claude" | "claudecode" | "anthropic" => QuotaProviderId::ClaudeCode,
             _ => QuotaProviderId::Antigravity,
@@ -90,6 +94,7 @@ pub enum ModelQuotaStatus {
     Unavailable,
     Unsupported,
     AuthRequired,
+    ReauthorizationRequired,
     RateLimited,
     NetworkError,
     NotFound,
@@ -152,6 +157,7 @@ pub enum QuotaProviderErrorKind {
     AccountNotFound,
     CredentialUnavailable,
     OAuthRefreshFailed,
+    ReauthorizationRequired,
     Unauthorized,
     Forbidden,
     RateLimited,
@@ -200,11 +206,15 @@ pub struct QuotaProviderRegistry {
 }
 
 impl QuotaProviderRegistry {
-    pub fn new() -> Self {
+    pub fn new(credential_storage: Arc<dyn SecureCredentialStorage>) -> Self {
         let mut providers: HashMap<QuotaProviderId, Arc<dyn QuotaProvider>> = HashMap::new();
         providers.insert(
             QuotaProviderId::Antigravity,
             Arc::new(crate::monitor::providers::AntigravityQuotaProvider::new()),
+        );
+        providers.insert(
+            QuotaProviderId::GoogleCloudCode,
+            Arc::new(crate::monitor::providers::GoogleCloudCodeQuotaProvider::new(credential_storage)),
         );
         Self { providers }
     }
@@ -304,14 +314,21 @@ impl SecureCredentialStorage for KeyringCredentialStorage {
             message: sanitize_error_message(&format!("Failed to initialize OS keyring entry: {}", e)),
         })?;
 
-        match entry.delete_password() {
-            Ok(_) => Ok(()),
-            Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(QuotaProviderError {
-                kind: QuotaProviderErrorKind::CredentialUnavailable,
-                message: sanitize_error_message(&format!("Failed to delete from OS keyring: {}", e)),
-            }),
+        let _ = entry.delete_password();
+
+        #[cfg(target_os = "windows")]
+        {
+            let legacy_target = format!("LegacyGeneric:target={}.{}", account_id, OAUTH_KEYRING_SERVICE);
+            let _ = std::process::Command::new("cmdkey")
+                .args(["/delete", &legacy_target])
+                .output();
+            let raw_target = format!("{}.{}", account_id, OAUTH_KEYRING_SERVICE);
+            let _ = std::process::Command::new("cmdkey")
+                .args(["/delete", &raw_target])
+                .output();
         }
+
+        Ok(())
     }
 
     fn list_account_ids(&self) -> Result<Vec<String>, QuotaProviderError> {
@@ -384,12 +401,14 @@ impl QuotaProviderService {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
+        let registry = Arc::new(QuotaProviderRegistry::new(credential_storage.clone()));
+
         Self {
             credential_storage,
             cache: Mutex::new(HashMap::new()),
             cache_ttl: Duration::from_secs(60), // 60s memory cache
             http_client: client,
-            registry: Arc::new(QuotaProviderRegistry::new()),
+            registry,
         }
     }
 
@@ -452,21 +471,21 @@ impl QuotaProviderService {
             }]);
         }
 
-        let mut identities = Vec::new();
+        let mut accounts = Vec::new();
         for id in account_ids {
-            identities.push(AccountIdentity {
+            accounts.push(AccountIdentity {
                 id: id.clone(),
-                email: id.clone(),
+                email: id,
                 provider: "Antigravity Local Runtime".to_string(),
                 project_id: None,
                 tier: None,
-                status: "Connected".to_string(),
+                status: "Configured".to_string(),
             });
         }
-        Ok(identities)
+        Ok(accounts)
     }
 
-    /// Retrieve quota status for an account (with compound-key cache, multi-provider registry, and identity verification)
+    /// Primary interface to retrieve account quota with caching, rate limiting, and primary+fallback orchestration
     pub async fn get_account_quota(
         &self,
         provider_id: QuotaProviderId,
@@ -509,28 +528,180 @@ impl QuotaProviderService {
             }
         }
 
-        // Dispatch to registered provider implementation
-        let provider = match self.registry.get(provider_id) {
-            Ok(p) => p,
-            Err(e) => {
-                let exp_display = expected_email.unwrap_or("configured account");
-                let status = QuotaStatus {
+        let has_google_oauth = match self.credential_storage.get_refresh_token(account_id) {
+            Ok(Some(t)) => !t.trim().is_empty(),
+            _ => false,
+        };
+
+        // Primary Google Cloud Code + Fallback Antigravity Orchestration
+        // If the account has Google OAuth configured OR is set to GoogleCloudCode, prioritize Google Primary
+        let quota_result = if has_google_oauth || provider_id == QuotaProviderId::GoogleCloudCode {
+            if has_google_oauth {
+                // Account has Google OAuth configured -> PRIMARY
+                let google_provider = self.registry.get(QuotaProviderId::GoogleCloudCode);
+                let google_res = if let Ok(ref gp) = google_provider {
+                    gp.fetch_quota(account_id, expected_email).await
+                } else {
+                    Err(QuotaProviderError {
+                        kind: QuotaProviderErrorKind::ProviderNotImplemented,
+                        message: "Google Cloud Code provider not registered".to_string(),
+                    })
+                };
+
+                match google_res {
+                    Ok(status) if status.status == ModelQuotaStatus::Available => status,
+                    Ok(status) => status,
+                    Err(err) => {
+                        // Check if Antigravity local fallback is running and available
+                        let antigravity_provider = self.registry.get(QuotaProviderId::Antigravity);
+                        let fallback_res = if let Ok(ref ap) = antigravity_provider {
+                            ap.fetch_quota(account_id, expected_email).await
+                        } else {
+                            Err(err.clone())
+                        };
+
+                        match fallback_res {
+                            Ok(mut ant_res) if ant_res.status == ModelQuotaStatus::Available => {
+                                ant_res.safe_diagnostic_message = Some(
+                                    "Synchronized live quota via Antigravity Language Server (Fallback).".to_string(),
+                                );
+                                ant_res
+                            }
+                            _ => {
+                                // Fallback unavailable -> Retain Google primary identity and return degraded state
+                                let exp_display = expected_email.unwrap_or(account_id);
+                                let (status, data_source, data_quality) = match err.kind {
+                                    QuotaProviderErrorKind::ReauthorizationRequired => (
+                                        ModelQuotaStatus::ReauthorizationRequired,
+                                        QuotaDataSource::Unavailable,
+                                        QuotaDataQuality::Unavailable,
+                                    ),
+                                    QuotaProviderErrorKind::RateLimited => (
+                                        ModelQuotaStatus::RateLimited,
+                                        QuotaDataSource::RealProvider,
+                                        QuotaDataQuality::Live,
+                                    ),
+                                    QuotaProviderErrorKind::NetworkError => (
+                                        ModelQuotaStatus::NetworkError,
+                                        QuotaDataSource::RealProvider,
+                                        QuotaDataQuality::Unavailable,
+                                    ),
+                                    QuotaProviderErrorKind::Unauthorized | QuotaProviderErrorKind::Forbidden => (
+                                        ModelQuotaStatus::AuthRequired,
+                                        QuotaDataSource::Unavailable,
+                                        QuotaDataQuality::Unavailable,
+                                    ),
+                                    _ => (
+                                        ModelQuotaStatus::Unsupported,
+                                        QuotaDataSource::Unavailable,
+                                        QuotaDataQuality::Unavailable,
+                                    ),
+                                };
+
+                                QuotaStatus {
+                                    account_id: account_id.to_string(),
+                                    email: exp_display.to_string(),
+                                    tier: None,
+                                    provider: "Google Cloud Code".to_string(),
+                                    models: vec![],
+                                    fetched_at: current_unix_timestamp().to_string(),
+                                    status,
+                                    data_source,
+                                    data_quality,
+                                    safe_diagnostic_message: Some(err.message),
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                let exp_display = expected_email.unwrap_or(account_id);
+                QuotaStatus {
                     account_id: account_id.to_string(),
                     email: exp_display.to_string(),
                     tier: None,
-                    provider: provider_id.display_name().to_string(),
+                    provider: "Google Cloud Code".to_string(),
                     models: vec![],
                     fetched_at: current_unix_timestamp().to_string(),
-                    status: ModelQuotaStatus::Unsupported,
+                    status: ModelQuotaStatus::AuthRequired,
                     data_source: QuotaDataSource::Unavailable,
                     data_quality: QuotaDataQuality::Unavailable,
-                    safe_diagnostic_message: Some(e.message),
-                };
-                return Ok(status);
+                    safe_diagnostic_message: Some("Google OAuth connection required.".to_string()),
+                }
             }
-        };
+        } else if provider_id == QuotaProviderId::Antigravity {
+            // Account is explicitly configured with Antigravity provider
+            let antigravity_provider = match self.registry.get(QuotaProviderId::Antigravity) {
+                Ok(p) => p,
+                Err(e) => {
+                    let exp_display = expected_email.unwrap_or("configured account");
+                    return Ok(QuotaStatus {
+                        account_id: account_id.to_string(),
+                        email: exp_display.to_string(),
+                        tier: None,
+                        provider: provider_id.display_name().to_string(),
+                        models: vec![],
+                        fetched_at: current_unix_timestamp().to_string(),
+                        status: ModelQuotaStatus::Unsupported,
+                        data_source: QuotaDataSource::Unavailable,
+                        data_quality: QuotaDataQuality::Unavailable,
+                        safe_diagnostic_message: Some(format!("Provider {} unavailable: {}", provider_id.display_name(), e.message)),
+                    });
+                }
+            };
+            antigravity_provider.fetch_quota(account_id, expected_email).await
+                .unwrap_or_else(|err| {
+                    let exp_display = expected_email.unwrap_or(account_id);
+                    QuotaStatus {
+                        account_id: account_id.to_string(),
+                        email: exp_display.to_string(),
+                        tier: None,
+                        provider: "Antigravity".to_string(),
+                        models: vec![],
+                        fetched_at: current_unix_timestamp().to_string(),
+                        status: ModelQuotaStatus::AuthRequired,
+                        data_source: QuotaDataSource::Unavailable,
+                        data_quality: QuotaDataQuality::Unavailable,
+                        safe_diagnostic_message: Some(err.message),
+                    }
+                })
+        } else {
+            let provider = match self.registry.get(provider_id) {
+                Ok(p) => p,
+                Err(e) => {
+                    let exp_display = expected_email.unwrap_or("configured account");
+                    return Ok(QuotaStatus {
+                        account_id: account_id.to_string(),
+                        email: exp_display.to_string(),
+                        tier: None,
+                        provider: provider_id.display_name().to_string(),
+                        models: vec![],
+                        fetched_at: current_unix_timestamp().to_string(),
+                        status: ModelQuotaStatus::Unsupported,
+                        data_source: QuotaDataSource::Unavailable,
+                        data_quality: QuotaDataQuality::Unavailable,
+                        safe_diagnostic_message: Some(format!("Provider {} unavailable: {}", provider_id.display_name(), e.message)),
+                    });
+                }
+            };
 
-        let quota_result = provider.fetch_quota(account_id, expected_email).await?;
+            provider.fetch_quota(account_id, expected_email).await
+                .unwrap_or_else(|err| {
+                    let exp_display = expected_email.unwrap_or("configured account");
+                    QuotaStatus {
+                        account_id: account_id.to_string(),
+                        email: exp_display.to_string(),
+                        tier: None,
+                        provider: provider_id.display_name().to_string(),
+                        models: vec![],
+                        fetched_at: current_unix_timestamp().to_string(),
+                        status: ModelQuotaStatus::Unsupported,
+                        data_source: QuotaDataSource::Unavailable,
+                        data_quality: QuotaDataQuality::Unavailable,
+                        safe_diagnostic_message: Some(format!("Failed to fetch quota from {}: {}", provider_id.display_name(), err.message)),
+                    }
+                })
+        };
 
         // Cache valid live responses under the compound key
         if quota_result.status == ModelQuotaStatus::Available

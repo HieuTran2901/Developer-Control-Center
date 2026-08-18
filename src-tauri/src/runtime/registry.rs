@@ -35,7 +35,14 @@ impl RuntimeRegistry {
 
     pub fn get_all(&self) -> Vec<ProcessModel> {
         if let Ok(map) = self.processes.read() {
-            map.values().cloned().collect()
+            let mut list: Vec<ProcessModel> = map.values().cloned().collect();
+            list.sort_by(|a, b| {
+                a.start_time
+                    .unwrap_or(0)
+                    .cmp(&b.start_time.unwrap_or(0))
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+            list
         } else {
             Vec::new()
         }

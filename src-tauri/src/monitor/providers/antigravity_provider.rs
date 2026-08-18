@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 
+use crate::monitor::antigravity_discovery::{AntigravityDiscovery, DiscoveryErrorKind};
 use crate::monitor::antigravity_quota::{
     AntigravityQuotaClient, AntigravityRuntimeState,
 };
@@ -54,7 +55,74 @@ impl QuotaProvider for AntigravityQuotaProvider {
             None => true,
         };
 
-        match self.client.fetch_quota().await {
+        let runtimes = match AntigravityDiscovery::discover_all_runtimes() {
+            Ok(r) => r,
+            Err(e) => {
+                let exp_display = expected_email.unwrap_or("configured account");
+                let status = QuotaStatus {
+                    account_id: account_id.to_string(),
+                    email: exp_display.to_string(),
+                    tier: None,
+                    provider: "Antigravity Local Runtime".to_string(),
+                    models: vec![],
+                    fetched_at: current_unix_timestamp().to_string(),
+                    status: ModelQuotaStatus::Unavailable,
+                    data_source: QuotaDataSource::Unavailable,
+                    data_quality: QuotaDataQuality::Unavailable,
+                    safe_diagnostic_message: Some(e.message),
+                };
+                return Ok(status);
+            }
+        };
+
+        // Resolve target runtime matching expected_email
+        let target_runtime = if is_placeholder && account_id == "default" {
+            runtimes.first().cloned()
+        } else if let Some(ref exp) = normalized_expected {
+            self.client.find_matching_runtime_for_email(exp, &runtimes).await
+        } else {
+            runtimes.first().cloned()
+        };
+
+        let runtime = match target_runtime {
+            Some(r) => r,
+            None => {
+                let exp_display = expected_email.unwrap_or("configured account");
+                let running_email = if let Some(first_rt) = runtimes.first() {
+                    self.client.get_runtime_email(first_rt).await.ok()
+                } else {
+                    None
+                };
+
+                let diagnostic_msg = if let Some(other_email) = running_email {
+                    format!(
+                        "Account mismatch: Antigravity is currently authenticated as {}, but this account is {}.",
+                        other_email, exp_display
+                    )
+                } else {
+                    format!(
+                        "Account mismatch: No running Antigravity instance is currently authenticated as {}.",
+                        exp_display
+                    )
+                };
+
+                let status = QuotaStatus {
+                    account_id: account_id.to_string(),
+                    email: exp_display.to_string(),
+                    tier: None,
+                    provider: "Antigravity Local Runtime".to_string(),
+                    models: vec![],
+                    fetched_at: current_unix_timestamp().to_string(),
+                    status: ModelQuotaStatus::AuthRequired,
+                    data_source: QuotaDataSource::Unavailable,
+                    data_quality: QuotaDataQuality::Unavailable,
+                    safe_diagnostic_message: Some(diagnostic_msg),
+                };
+                return Ok(status);
+            }
+        };
+
+        match self.client.fetch_quota_from_runtime(&runtime).await {
             Ok(snap) => {
                 let runtime_email_raw = snap
                     .account_identity
@@ -62,7 +130,7 @@ impl QuotaProvider for AntigravityQuotaProvider {
                     .unwrap_or_else(|| "unknown@antigravity.local".to_string());
                 let runtime_email_norm = runtime_email_raw.trim().to_ascii_lowercase();
 
-                // Strict identity matching
+                // Strict identity verification
                 let is_match = if is_placeholder && account_id == "default" {
                     true
                 } else if let Some(ref exp) = normalized_expected {

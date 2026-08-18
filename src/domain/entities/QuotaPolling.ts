@@ -5,6 +5,7 @@ export type AccountPollingState =
   | 'Checking'
   | 'Online'
   | 'AuthRequired'
+  | 'ReauthorizationRequired'
   | 'RateLimited'
   | 'NetworkError'
   | 'ProviderError'

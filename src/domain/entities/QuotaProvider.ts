@@ -1,10 +1,11 @@
-export type QuotaProviderId = 'antigravity' | 'codex' | 'claude_code';
+export type QuotaProviderId = 'antigravity' | 'google_cloud_code' | 'codex' | 'claude_code';
 
 export type ModelQuotaStatus =
   | 'Available'
   | 'Unavailable'
   | 'Unsupported'
   | 'AuthRequired'
+  | 'ReauthorizationRequired'
   | 'RateLimited'
   | 'NetworkError'
   | 'NotFound';

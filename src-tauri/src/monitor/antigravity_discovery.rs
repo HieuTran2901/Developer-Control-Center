@@ -43,16 +43,12 @@ impl std::error::Error for DiscoveryError {}
 pub struct AntigravityDiscovery;
 
 impl AntigravityDiscovery {
-    /// Discover running Antigravity Language Server runtime metadata
-    pub fn discover_runtime() -> Result<AntigravityRuntime, DiscoveryError> {
+    /// Discover all running Antigravity Language Server runtime instances
+    pub fn discover_all_runtimes() -> Result<Vec<AntigravityRuntime>, DiscoveryError> {
         let mut sys = System::new_all();
         sys.refresh_all();
 
-        // 1. Locate language_server.exe process
-        let mut ls_pid: Option<u32> = None;
-        let mut parent_pid: Option<u32> = None;
-        let mut exe_path: Option<String> = None;
-        let mut cmd_line_str: Option<String> = None;
+        let mut candidate_processes = Vec::new();
 
         for (pid, process) in sys.processes() {
             let name = process.name().to_string_lossy();
@@ -82,71 +78,78 @@ impl AntigravityDiscovery {
                     || full_cmd.contains("csrf_token")
                     || full_cmd.contains("subclient_type")
                 {
-                    ls_pid = Some(pid.as_u32());
-                    parent_pid = process.parent().map(|p| p.as_u32());
-                    exe_path = Some(exe);
-                    cmd_line_str = Some(full_cmd);
-                    break;
+                    candidate_processes.push((
+                        pid.as_u32(),
+                        process.parent().map(|p| p.as_u32()),
+                        exe,
+                        full_cmd,
+                    ));
                 }
             }
         }
 
-        let pid = match ls_pid {
-            Some(p) => p,
-            None => {
-                // Check if main Antigravity process is running
-                let antigravity_running = sys.processes().values().any(|p| {
-                    let n = p.name().to_string_lossy().to_lowercase();
-                    n.contains("antigravity")
-                });
+        if candidate_processes.is_empty() {
+            let antigravity_running = sys.processes().values().any(|p| {
+                let n = p.name().to_string_lossy().to_lowercase();
+                n.contains("antigravity")
+            });
 
-                if antigravity_running {
-                    return Err(DiscoveryError {
-                        kind: DiscoveryErrorKind::LanguageServerNotFound,
-                        message: "Antigravity is running, but language_server.exe was not found.".to_string(),
-                    });
-                } else {
-                    return Err(DiscoveryError {
-                        kind: DiscoveryErrorKind::AntigravityNotRunning,
-                        message: "Antigravity is not currently running.".to_string(),
-                    });
+            if antigravity_running {
+                return Err(DiscoveryError {
+                    kind: DiscoveryErrorKind::LanguageServerNotFound,
+                    message: "Antigravity is running, but language_server.exe was not found.".to_string(),
+                });
+            } else {
+                return Err(DiscoveryError {
+                    kind: DiscoveryErrorKind::AntigravityNotRunning,
+                    message: "Antigravity is not currently running.".to_string(),
+                });
+            }
+        }
+
+        let mut runtimes = Vec::new();
+
+        for (pid, parent_pid, exe, cmd_line) in candidate_processes {
+            if let Some(csrf_token) = Self::extract_csrf_token(&cmd_line) {
+                if let Ok(ports) = Self::find_listening_ports_for_pid(pid) {
+                    if !ports.is_empty() {
+                        let port = ports[0];
+                        runtimes.push(AntigravityRuntime {
+                            process_id: pid,
+                            parent_process_id: parent_pid,
+                            executable_path: exe,
+                            command_line: cmd_line,
+                            rpc_host: "127.0.0.1".to_string(),
+                            rpc_port: port,
+                            csrf_token,
+                        });
+                    }
                 }
             }
-        };
+        }
 
-        let cmd_line = cmd_line_str.unwrap_or_default();
-        let exe = exe_path.unwrap_or_else(|| "language_server.exe".to_string());
-
-        // 2. Extract CSRF token from command line
-        let csrf_token = Self::extract_csrf_token(&cmd_line).ok_or_else(|| DiscoveryError {
-            kind: DiscoveryErrorKind::CsrfTokenNotFound,
-            message: "Failed to extract --csrf_token argument from Language Server process.".to_string(),
-        })?;
-
-        // 3. Discover dynamic listening ports for this PID
-        let ports = Self::find_listening_ports_for_pid(pid)?;
-        if ports.is_empty() {
+        if runtimes.is_empty() {
             return Err(DiscoveryError {
                 kind: DiscoveryErrorKind::RpcPortNotFound,
-                message: format!(
-                    "No listening TCP ports found for Language Server process (PID {}).",
-                    pid
-                ),
+                message: "No reachable RPC ports found for running Language Server instances.".to_string(),
             });
         }
 
-        // Primary port selection: use first discovered port
-        let port = ports[0];
+        // Sort deterministically by PID ASC
+        runtimes.sort_by_key(|r| r.process_id);
+        Ok(runtimes)
+    }
 
-        Ok(AntigravityRuntime {
-            process_id: pid,
-            parent_process_id: parent_pid,
-            executable_path: exe,
-            command_line: cmd_line,
-            rpc_host: "127.0.0.1".to_string(),
-            rpc_port: port,
-            csrf_token,
-        })
+    /// Discover primary running Antigravity Language Server runtime metadata
+    pub fn discover_runtime() -> Result<AntigravityRuntime, DiscoveryError> {
+        let runtimes = Self::discover_all_runtimes()?;
+        runtimes
+            .into_iter()
+            .next()
+            .ok_or_else(|| DiscoveryError {
+                kind: DiscoveryErrorKind::LanguageServerNotFound,
+                message: "No Antigravity Language Server instance found.".to_string(),
+            })
     }
 
     /// Extract the value of `--csrf_token <UUID>` from command line string

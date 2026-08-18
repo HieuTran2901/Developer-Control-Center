@@ -277,8 +277,29 @@ pub async fn quota_reconnect_startup_accounts_cmd(
 }
 
 #[tauri::command]
-pub async fn quota_connect_google_account_cmd(
+pub async fn quota_connect_antigravity_account_cmd(
+    account_id: String,
+    state: State<'_, MonitorState>,
+) -> Result<AccountQuotaSnapshot, String> {
+    // 1. Get existing account config
+    let account = state
+        .polling_engine
+        .get_account_config(&account_id)
+        .await
+        .ok_or_else(|| format!("Account {} not found", account_id))?;
 
+    // 2. Set provider to Antigravity explicitly in registry
+    let mut updated_config = account.clone();
+    updated_config.provider = Some(quota_provider::QuotaProviderId::Antigravity);
+    updated_config.updated_at = quota_provider::current_unix_timestamp().to_string();
+    let _ = state.polling_engine.update_account_config(updated_config).await;
+
+    // 3. Immediately trigger refresh through Antigravity provider
+    state.polling_engine.refresh_account_now(&account_id).await
+}
+
+#[tauri::command]
+pub async fn quota_connect_google_account_cmd(
     account_id: String,
     allow_email_update: Option<bool>,
     state: State<'_, MonitorState>,
@@ -287,6 +308,22 @@ pub async fn quota_connect_google_account_cmd(
         .oauth_service
         .start_oauth_flow(&account_id, allow_email_update.unwrap_or(false))
         .await
+}
+
+#[tauri::command]
+pub async fn quota_disconnect_google_account_cmd(
+    account_id: String,
+    state: State<'_, MonitorState>,
+) -> Result<bool, String> {
+    state.oauth_service.disconnect_account(&account_id).await
+}
+
+#[tauri::command]
+pub async fn quota_get_google_connection_status_cmd(
+    account_id: String,
+    state: State<'_, MonitorState>,
+) -> Result<bool, String> {
+    Ok(state.oauth_service.get_connection_status(&account_id))
 }
 
 #[tauri::command]

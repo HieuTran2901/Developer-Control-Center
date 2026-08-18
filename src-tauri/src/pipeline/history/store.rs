@@ -283,7 +283,11 @@ impl PipelineHistoryStore {
             });
         }
 
-        summaries.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+        summaries.sort_by(|a, b| {
+            b.updated_at_ms
+                .cmp(&a.updated_at_ms)
+                .then_with(|| a.pipeline_id.cmp(&b.pipeline_id))
+        });
         summaries
     }
 

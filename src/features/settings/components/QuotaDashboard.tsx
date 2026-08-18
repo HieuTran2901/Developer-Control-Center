@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Button } from '@/shared/components/ui/button';
 import { Icon } from '@/shared/components/ui/Icon';
 import { quotaPollingService, quotaProviderService } from '@/application/services';
@@ -9,6 +9,7 @@ import {
   QuotaRefreshSettings,
 } from '@/domain/entities/QuotaPolling';
 import { QuotaVerificationDiagnostic } from '@/domain/entities/QuotaProvider';
+import { QuotaOrchestrationService } from '@/domain/services/QuotaOrchestrationService';
 import { QuotaSummary } from './QuotaSummary';
 import { QuotaAccountCard, groupModelsIntoQuotaPools } from './QuotaAccountCard';
 import { AddAccountModal } from './AddAccountModal';
@@ -30,6 +31,7 @@ export function QuotaDashboard() {
   const [isVerifying, setIsVerifying] = useState(false);
   const [verificationResult, setVerificationResult] = useState<QuotaVerificationDiagnostic | null>(null);
   const [selectedDiagnosticAccountId, setSelectedDiagnosticAccountId] = useState<string>('');
+  const removedAccountIdsRef = useRef<Set<string>>(new Set());
 
   // Load initial data
   const loadDashboardData = useCallback(async () => {
@@ -63,15 +65,18 @@ export function QuotaDashboard() {
     loadDashboardData();
 
     const unsubscribeAccountUpdated = quotaPollingService.onAccountUpdated((updatedSnap) => {
+      if (removedAccountIdsRef.current.has(updatedSnap.accountId)) {
+        return;
+      }
       setSnapshots((prev) => {
         const index = prev.findIndex((s) => s.accountId === updatedSnap.accountId);
-        if (index < 0) {
-          // Account is no longer registered in active state (e.g. was removed). Ignore stale late event.
-          return prev;
+        if (index >= 0) {
+          const next = [...prev];
+          next[index] = updatedSnap;
+          return sortSnapshots(next);
+        } else {
+          return sortSnapshots([...prev, updatedSnap]);
         }
-        const next = [...prev];
-        next[index] = updatedSnap;
-        return sortSnapshots(next);
       });
     });
 
@@ -160,6 +165,7 @@ export function QuotaDashboard() {
 
   const handleAddAccount = async (config: AccountMonitorConfig) => {
     try {
+      removedAccountIdsRef.current.delete(config.accountId);
       await quotaPollingService.registerAccount(config);
       setIsAddModalOpen(false);
       // Immediately reload all account states from backend
@@ -172,6 +178,25 @@ export function QuotaDashboard() {
     } catch (e: any) {
       console.error('Failed to register account:', e);
       setError(e?.message || String(e) || 'Failed to add account.');
+    }
+  };
+
+  const handleAccountAdded = async (newAccountId?: string) => {
+    try {
+      if (newAccountId) {
+        removedAccountIdsRef.current.delete(newAccountId);
+      }
+      const [updatedStates, status] = await Promise.all([
+        quotaPollingService.getAllStates(),
+        quotaPollingService.getPollingStatus(),
+      ]);
+      setSnapshots(sortSnapshots(updatedStates));
+      setPollingStatus(status);
+      if (newAccountId) {
+        handleRefreshAccount(newAccountId);
+      }
+    } catch (e: any) {
+      console.error('Failed to reload accounts after adding in V1:', e);
     }
   };
 
@@ -223,8 +248,8 @@ export function QuotaDashboard() {
   };
 
   const handleRemoveAccount = async (accountId: string) => {
-
     try {
+      removedAccountIdsRef.current.add(accountId);
       await quotaPollingService.removeAccount(accountId);
       setSnapshots((prev) => prev.filter((s) => s.accountId !== accountId));
       if (selectedDiagnosticAccountId === accountId) {
@@ -234,6 +259,7 @@ export function QuotaDashboard() {
       const status = await quotaPollingService.getPollingStatus();
       setPollingStatus(status);
     } catch (e: any) {
+      removedAccountIdsRef.current.delete(accountId);
       console.error(`Failed to remove account ${accountId}:`, e);
       setError(e?.message || String(e));
     }
@@ -282,6 +308,11 @@ export function QuotaDashboard() {
     }
   }
 
+  // Orchestration & Recommendation
+  const recommendedAccount = useMemo(() => {
+    return QuotaOrchestrationService.getRecommendedAccount(snapshots);
+  }, [snapshots]);
+
   return (
     <div className="space-y-4">
       {/* Global Error Banner */}
@@ -316,6 +347,42 @@ export function QuotaDashboard() {
         onRefreshAll={handleRefreshAll}
         onUpdateRefreshSettings={handleUpdateRefreshSettings}
       />
+
+      {/* Recommended Account Intelligent Orchestration Banner */}
+      {recommendedAccount && (
+        <div className="p-3.5 rounded-xl bg-primary/10 border border-primary/25 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-sans animate-in fade-in-50 duration-150">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center text-primary shrink-0">
+              <Icon name="Sparkles" className="w-4 h-4" />
+            </div>
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-foreground text-xs">
+                  Optimal Account: <span className="text-primary font-bold">{recommendedAccount.displayName}</span>
+                </span>
+                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-primary/20 text-primary uppercase tracking-wider">
+                  Recommended
+                </span>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {recommendedAccount.reason} · Reset: {recommendedAccount.nextResetFormatted}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => handleRefreshAccount(recommendedAccount.accountId)}
+              disabled={refreshingAccountId === recommendedAccount.accountId}
+              className="h-7 text-xs px-2.5 bg-surface hover:bg-muted font-medium gap-1"
+            >
+              <Icon name={refreshingAccountId === recommendedAccount.accountId ? 'Loader2' : 'RefreshCw'} className={`w-3 h-3 ${refreshingAccountId === recommendedAccount.accountId ? 'animate-spin' : ''}`} />
+              <span>Verify Quota</span>
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Your Accounts Section */}
       <div className="space-y-2.5">
@@ -383,8 +450,19 @@ export function QuotaDashboard() {
       {/* Add Account Modal */}
       <AddAccountModal
         isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
+        onClose={async () => {
+          setIsAddModalOpen(false);
+          try {
+            const updatedStates = await quotaPollingService.getAllStates();
+            setSnapshots(sortSnapshots(updatedStates));
+            const status = await quotaPollingService.getPollingStatus();
+            setPollingStatus(status);
+          } catch (e) {
+            console.error('Failed to reload accounts on modal close:', e);
+          }
+        }}
         onAddAccount={handleAddAccount}
+        onAccountAdded={handleAccountAdded}
       />
 
 

@@ -96,12 +96,12 @@ export function SecurityActiveFindings({ findings, status, onRunScan, hasTarget 
           </div>
         ) : (
           <div className="space-y-4">
-            {filteredFindings.map((f, i) => {
+            {filteredFindings.map((f) => {
               const isDependency = f.category === 'DEPENDENCY' || (f.metadata && f.metadata.type === 'Dependency');
               const meta = f.metadata?.type === 'Dependency' ? f.metadata.data : null;
               
               return (
-                <div key={i} className="p-4 sm:p-5 border border-border rounded-lg bg-background hover:border-border/80 transition-colors shadow-sm">
+                <div key={f.id} className="p-4 sm:p-5 border border-border rounded-lg bg-background hover:border-border/80 transition-colors shadow-sm">
                   <div className="flex justify-between items-start gap-4">
                     <span className={`font-semibold text-foreground text-sm leading-tight break-words min-w-0 ${f.severity.toUpperCase() === 'CRITICAL' || f.severity.toUpperCase() === 'HIGH' ? 'text-danger' : ''}`}>
                       {isDependency && meta ? `${meta.packageName} (${meta.version}) - ${f.title}` : f.title}

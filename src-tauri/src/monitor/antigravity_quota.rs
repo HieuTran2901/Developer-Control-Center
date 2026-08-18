@@ -118,6 +118,96 @@ impl AntigravityQuotaClient {
         self.fetch_quota_from_runtime(&runtime).await
     }
 
+    /// Extract authenticated email for a specific Antigravity runtime
+    pub async fn get_runtime_email(
+        &self,
+        runtime: &AntigravityRuntime,
+    ) -> Result<String, AntigravityQuotaError> {
+        let user_status_url = format!(
+            "https://{}:{}/exa.language_server_pb.LanguageServerService/GetUserStatus",
+            runtime.rpc_host, runtime.rpc_port
+        );
+
+        let resp = self
+            .http_client
+            .post(&user_status_url)
+            .header("Content-Type", "application/json")
+            .header("Connect-Protocol-Version", "1")
+            .header("x-codeium-csrf-token", &runtime.csrf_token)
+            .body("{}")
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    AntigravityQuotaError {
+                        state: AntigravityRuntimeState::RpcTimeout,
+                        message: "Connection to Antigravity Language Server timed out.".to_string(),
+                    }
+                } else {
+                    AntigravityQuotaError {
+                        state: AntigravityRuntimeState::RpcConnectionFailed,
+                        message: format!("Failed to connect to local Antigravity RPC: {}", e),
+                    }
+                }
+            })?;
+
+        let status = resp.status();
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(AntigravityQuotaError {
+                state: AntigravityRuntimeState::RpcUnauthorized,
+                message: "Antigravity Language Server rejected the local CSRF token.".to_string(),
+            });
+        }
+
+        if !status.is_success() {
+            return Err(AntigravityQuotaError {
+                state: AntigravityRuntimeState::InvalidResponse,
+                message: format!("Language Server returned HTTP status {}", status),
+            });
+        }
+
+        let body_text = resp.text().await.map_err(|e| AntigravityQuotaError {
+            state: AntigravityRuntimeState::InvalidResponse,
+            message: format!("Failed to read response body: {}", e),
+        })?;
+
+        let val: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| AntigravityQuotaError {
+            state: AntigravityRuntimeState::InvalidResponse,
+            message: format!("Failed to parse GetUserStatus JSON: {}", e),
+        })?;
+
+        let email = val
+            .get("userStatus")
+            .and_then(|u| u.get("email"))
+            .and_then(|e| e.as_str())
+            .unwrap_or("unknown@antigravity.local")
+            .to_string();
+
+        Ok(email)
+    }
+
+    /// Search across all discovered runtimes to find the instance matching expected_email
+    pub async fn find_matching_runtime_for_email(
+        &self,
+        expected_email: &str,
+        runtimes: &[AntigravityRuntime],
+    ) -> Option<AntigravityRuntime> {
+        let norm_exp = expected_email.trim().to_ascii_lowercase();
+        if norm_exp.is_empty() {
+            return None;
+        }
+
+        for runtime in runtimes {
+            if let Ok(email) = self.get_runtime_email(runtime).await {
+                if email.trim().to_ascii_lowercase() == norm_exp {
+                    return Some(runtime.clone());
+                }
+            }
+        }
+
+        None
+    }
+
     /// Fetch quota from an already discovered runtime
     pub async fn fetch_quota_from_runtime(
         &self,

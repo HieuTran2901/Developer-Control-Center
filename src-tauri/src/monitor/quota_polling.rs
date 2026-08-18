@@ -28,6 +28,7 @@ pub enum AccountPollingState {
     Checking,
     Online,
     AuthRequired,
+    ReauthorizationRequired,
     RateLimited,
     NetworkError,
     ProviderError,
@@ -59,7 +60,7 @@ fn default_true() -> bool {
 
 impl AccountMonitorConfig {
     pub fn provider(&self) -> QuotaProviderId {
-        self.provider.unwrap_or(QuotaProviderId::Antigravity)
+        self.provider.unwrap_or(QuotaProviderId::GoogleCloudCode)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -497,15 +498,19 @@ impl QuotaPollingEngine {
                 let now_ts = current_unix_timestamp();
                 let accounts = registry.list().await;
 
-                // Check if any enabled Antigravity account is due for refresh
+                // Check if any enabled account is due for refresh
                 let mut should_refresh_batch = false;
                 for acc in &accounts {
-                    if !acc.enabled || acc.provider() != QuotaProviderId::Antigravity {
+                    if !acc.enabled {
                         continue;
                     }
 
                     let snaps = snapshots.read().await;
                     if let Some(snap) = snaps.get(&acc.account_id) {
+                        if snap.status == AccountPollingState::ReauthorizationRequired {
+                            // Suppress automatic retry storm for accounts requiring explicit user reauthorization
+                            continue;
+                        }
                         if let Some(next_ref) = &snap.next_refresh_at {
                             if let Ok(next_ts) = next_ref.parse::<u64>() {
                                 if now_ts >= next_ts {
@@ -530,22 +535,33 @@ impl QuotaPollingEngine {
                     let next_cycle_ts = now_ts + interval_secs;
                     *next_global_refresh.write().await = Some(next_cycle_ts.to_string());
 
-                    // AG-9.32: Advance deadlines for all dispatched accounts immediately to avoid 1s polling storm
+                    // Advance deadlines for all dispatched accounts immediately to avoid 1s polling storm
                     {
                         let mut snaps = snapshots.write().await;
                         for acc in &accounts {
-                            if acc.enabled && acc.provider() == QuotaProviderId::Antigravity {
+                            if acc.enabled {
                                 if let Some(snap) = snaps.get_mut(&acc.account_id) {
-                                    snap.next_refresh_at = Some(next_cycle_ts.to_string());
+                                    if snap.status != AccountPollingState::ReauthorizationRequired {
+                                        snap.next_refresh_at = Some(next_cycle_ts.to_string());
+                                    }
                                 }
                             }
                         }
                     }
 
-                    // AG-9.32: Bounded asynchronous dispatch without account dropping
+                    // Bounded asynchronous dispatch without account dropping
                     for acc in accounts {
-                        if !acc.enabled || acc.provider() != QuotaProviderId::Antigravity {
+                        if !acc.enabled {
                             continue;
+                        }
+
+                        {
+                            let snaps = snapshots.read().await;
+                            if let Some(snap) = snaps.get(&acc.account_id) {
+                                if snap.status == AccountPollingState::ReauthorizationRequired {
+                                    continue;
+                                }
+                            }
                         }
 
                         let sem = semaphore.clone();
@@ -835,6 +851,14 @@ impl QuotaPollingEngine {
         self.registry.list().await
     }
 
+    pub async fn get_account_config(&self, account_id: &str) -> Option<AccountMonitorConfig> {
+        self.registry.get(account_id).await
+    }
+
+    pub async fn update_account_config(&self, config: AccountMonitorConfig) -> Result<(), String> {
+        self.registry.update(config).await
+    }
+
     async fn execute_account_refresh(
         acc: &AccountMonitorConfig,
         snapshots: Arc<RwLock<HashMap<String, AccountQuotaSnapshot>>>,
@@ -888,16 +912,37 @@ impl QuotaPollingEngine {
         let snapshot = match timeout_res {
             Ok(Ok(quota)) => {
                 let (status, data_source, data_quality, actual_quota, sync_time, error_msg) = match quota.status {
-                    ModelQuotaStatus::Available => (
-                        AccountPollingState::Online,
-                        quota.data_source.clone(),
-                        quota.data_quality.clone(),
-                        Some(quota.clone()),
-                        Some(quota.fetched_at.clone()),
-                        None,
-                    ),
+                    ModelQuotaStatus::Available => {
+                        let has_models = !quota.models.is_empty();
+                        let actual_q = if has_models {
+                            Some(quota.clone())
+                        } else {
+                            None
+                        };
+                        let sync_t = if has_models {
+                            Some(quota.fetched_at.clone())
+                        } else {
+                            None
+                        };
+                        (
+                            AccountPollingState::Online,
+                            quota.data_source.clone(),
+                            quota.data_quality.clone(),
+                            actual_q,
+                            sync_t,
+                            quota.safe_diagnostic_message.clone(),
+                        )
+                    }
                     ModelQuotaStatus::AuthRequired => (
                         AccountPollingState::AuthRequired,
+                        crate::monitor::quota_provider::QuotaDataSource::Unavailable,
+                        crate::monitor::quota_provider::QuotaDataQuality::Unavailable,
+                        None,
+                        None,
+                        quota.safe_diagnostic_message.clone(),
+                    ),
+                    ModelQuotaStatus::ReauthorizationRequired => (
+                        AccountPollingState::ReauthorizationRequired,
                         crate::monitor::quota_provider::QuotaDataSource::Unavailable,
                         crate::monitor::quota_provider::QuotaDataQuality::Unavailable,
                         None,
@@ -1033,6 +1078,13 @@ impl QuotaPollingEngine {
             return snapshot;
         }
 
+        let old_status_str = existing.as_ref().map(|e| format!("{:?}", e.status)).unwrap_or_else(|| "None".to_string());
+        let new_status_str = format!("{:?}", snapshot.status);
+        eprintln!(
+            "[Snapshot] SNAPSHOT UPDATE: account_id={}, old_status={}, new_status={}, error_msg={:?}",
+            acc.account_id, old_status_str, new_status_str, snapshot.error_message
+        );
+
         // Update in-memory snapshots cache
         {
             let mut snaps = snapshots.write().await;
@@ -1042,6 +1094,7 @@ impl QuotaPollingEngine {
         // Emit safe Tauri event
         let handle_opt = app_handle.read().await.clone();
         if let Some(ref app) = handle_opt {
+            eprintln!("[IPC] IPC ACCOUNT UPDATED: account_id={}, status={}, event_emitted=true", acc.account_id, new_status_str);
             let _ = app.emit("quota:account-updated", &snapshot);
         }
 
@@ -1122,7 +1175,7 @@ mod tests {
     }
 
     #[test]
-    fn test_backward_compatibility_missing_provider_defaults_to_antigravity() {
+    fn test_backward_compatibility_missing_provider_defaults_to_google_cloud_code() {
         let legacy_json = r#"{
             "accountId": "legacy-acc-1",
             "email": "legacy@example.com",
@@ -1135,7 +1188,7 @@ mod tests {
         }"#;
 
         let parsed: AccountMonitorConfig = serde_json::from_str(legacy_json).expect("Parse legacy json");
-        assert_eq!(parsed.provider(), QuotaProviderId::Antigravity);
+        assert_eq!(parsed.provider(), QuotaProviderId::GoogleCloudCode);
         assert_eq!(parsed.email, "legacy@example.com");
         assert!(parsed.auto_connect, "Legacy accounts must default auto_connect to true");
     }
@@ -1206,6 +1259,7 @@ mod tests {
         let snap = QuotaPollingEngine::execute_account_refresh(
             &config,
             Arc::new(RwLock::new(HashMap::new())),
+            engine.registry.clone(),
             engine.provider.clone(),
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(HashSet::new())),
@@ -1310,6 +1364,7 @@ mod tests {
         let result = QuotaPollingEngine::execute_account_refresh(
             &config,
             snapshots,
+            engine.registry.clone(),
             engine.provider.clone(),
             Arc::new(RwLock::new(None)),
             in_flight,

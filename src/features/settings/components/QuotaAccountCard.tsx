@@ -4,6 +4,8 @@ import { Button } from '@/shared/components/ui/button';
 import { Icon } from '@/shared/components/ui/Icon';
 import { AccountPollingState, AccountQuotaSnapshot } from '@/domain/entities/QuotaPolling';
 import { ModelQuota } from '@/domain/entities/QuotaProvider';
+import { quotaPollingService } from '@/application/services';
+import { QuotaOrchestrationService } from '@/domain/services/QuotaOrchestrationService';
 
 export type ConnectStage =
   | 'idle'
@@ -89,10 +91,54 @@ export function QuotaAccountCard({
     (snapshot.status === 'NetworkError' || snapshot.status === 'ProviderError') &&
     snapshot.quota !== null;
 
+  const isGooglePrimary =
+    snapshot.quota?.provider === 'Google Cloud Code' ||
+    snapshot.provider === 'google_cloud_code' ||
+    snapshot.errorMessage?.toLowerCase().includes('cloud code') ||
+    snapshot.quota?.safeDiagnosticMessage?.toLowerCase().includes('cloud code') ||
+    snapshot.errorMessage?.toLowerCase().includes('google');
+  const isAntigravityFallback =
+    snapshot.quota?.provider === 'Antigravity Local Runtime' ||
+    snapshot.quota?.safeDiagnosticMessage?.includes('Fallback');
+
   const handleSaveRename = async (e: React.FormEvent) => {
     e.preventDefault();
     await onRename(snapshot.accountId, newDisplayName.trim() || null);
     setIsRenaming(false);
+  };
+
+  const handleConnectGoogleOAuth = async () => {
+    setConnectStage('connecting');
+    setConnectStatusMessage('Opening browser for Google OAuth authorization...');
+    setConnectErrorMessage(null);
+
+    try {
+      const res = await quotaPollingService.connectGoogleAccount(snapshot.accountId, false);
+      if (res.success) {
+        setConnectStage('connected');
+        setConnectStatusMessage('✓ Connected Google account successfully!');
+        await onRefresh(snapshot.accountId);
+        setTimeout(() => {
+          setConnectStage('idle');
+          setConnectStatusMessage(null);
+        }, 2000);
+      } else {
+        setConnectStage('failed');
+        setConnectErrorMessage(res.message || 'Google OAuth connection failed.');
+      }
+    } catch (err: any) {
+      setConnectStage('failed');
+      setConnectErrorMessage(err?.message || String(err) || 'Google authentication failed.');
+    }
+  };
+
+  const handleDisconnectGoogleOAuth = async () => {
+    try {
+      await quotaPollingService.disconnectGoogleAccount(snapshot.accountId);
+      await onRefresh(snapshot.accountId);
+    } catch (err: any) {
+      console.error('Failed to disconnect Google account:', err);
+    }
   };
 
   const handleConnectLocalAntigravity = async () => {
@@ -111,15 +157,26 @@ export function QuotaAccountCard({
     }, 600);
 
     try {
+      const updatedSnapshot = await quotaPollingService.connectAntigravityAccount(snapshot.accountId);
       await onRefresh(snapshot.accountId);
-      setConnectStage('connected');
-      setConnectStatusMessage('✓ Connected to Antigravity Local Runtime.');
+
+      if (updatedSnapshot.status === 'Online' && updatedSnapshot.quota) {
+        setConnectStage('connected');
+        setConnectStatusMessage('✓ Connected to Antigravity Local Runtime.');
+      } else {
+        setConnectStage('failed');
+        setConnectErrorMessage(
+          updatedSnapshot.errorMessage ||
+            'Antigravity is not currently running. Please launch Antigravity to monitor quota.'
+        );
+        setConnectStatusMessage(null);
+      }
 
       setTimeout(() => {
         setConnectStage('idle');
         setConnectStatusMessage(null);
         setConnectErrorMessage(null);
-      }, 2000);
+      }, 2500);
     } catch (err: any) {
       setConnectStage('failed');
       setConnectErrorMessage(
@@ -152,9 +209,23 @@ export function QuotaAccountCard({
         <CardHeader className="py-3 px-4 border-b border-border/40 bg-muted/5 space-y-1">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
-              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-primary/15 text-primary border border-primary/25 shrink-0 uppercase tracking-wider">
-                {snapshot.provider ? snapshot.provider.replace('_', ' ') : 'ANTIGRAVITY'}
-              </span>
+              {/* Dynamic Provider Badge */}
+              {isGooglePrimary ? (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/15 text-blue-400 border border-blue-500/25 shrink-0 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                  Google Cloud Code · Primary
+                </span>
+              ) : isAntigravityFallback ? (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 shrink-0 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  Antigravity · Fallback
+                </span>
+              ) : (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-primary/15 text-primary border border-primary/25 shrink-0 uppercase tracking-wider">
+                  {snapshot.provider ? snapshot.provider.replace('_', ' ') : 'ANTIGRAVITY'}
+                </span>
+              )}
+
               {isDefaultAccount && (
                 <span className="px-1 py-0.2 rounded text-[9px] font-semibold bg-muted text-muted-foreground border shrink-0">
                   DEFAULT
@@ -192,7 +263,11 @@ export function QuotaAccountCard({
                 </h3>
               )}
 
-              <StatusBadge status={snapshot.status} errorMessage={snapshot.errorMessage} />
+              <StatusBadge
+                status={snapshot.status}
+                errorMessage={snapshot.errorMessage}
+                isGooglePrimary={isGooglePrimary}
+              />
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
@@ -215,7 +290,7 @@ export function QuotaAccountCard({
                 </Button>
 
                 {isMenuOpen && (
-                  <div className="absolute right-0 top-7 z-30 w-44 rounded-lg bg-surface border border-border shadow-lg py-1 text-xs font-sans animate-in fade-in-50 duration-100">
+                  <div className="absolute right-0 top-7 z-30 w-52 rounded-lg bg-surface border border-border shadow-lg py-1 text-xs font-sans animate-in fade-in-50 duration-100">
                     <button
                       onClick={() => {
                         setIsMenuOpen(false);
@@ -226,6 +301,30 @@ export function QuotaAccountCard({
                       <Icon name="RefreshCw" className="w-3.5 h-3.5 text-muted-foreground" />
                       <span>Refresh Quota</span>
                     </button>
+
+                    <button
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        handleConnectGoogleOAuth();
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-foreground hover:bg-muted/50 flex items-center gap-2"
+                    >
+                      <Icon name="Key" className="w-3.5 h-3.5 text-blue-400" />
+                      <span>{isGooglePrimary ? 'Reconnect Google OAuth' : 'Connect Google OAuth'}</span>
+                    </button>
+
+                    {isGooglePrimary && (
+                      <button
+                        onClick={() => {
+                          setIsMenuOpen(false);
+                          handleDisconnectGoogleOAuth();
+                        }}
+                        className="w-full px-3 py-1.5 text-left text-foreground hover:bg-muted/50 flex items-center gap-2"
+                      >
+                        <Icon name="LogOut" className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Disconnect Google OAuth</span>
+                      </button>
+                    )}
 
                     <button
                       onClick={() => {
@@ -305,8 +404,8 @@ export function QuotaAccountCard({
             </div>
           )}
 
-          {/* Identity Mismatch / Offline Banner */}
-          {(snapshot.status === 'AuthRequired' || !snapshot.quota) && (
+          {/* Identity Mismatch / Reauthorization / Offline Banner */}
+          {(snapshot.status === 'AuthRequired' || snapshot.status === 'ReauthorizationRequired' || !snapshot.quota) && (
             <div>
               {isMismatch ? (
                 <div className="p-3.5 rounded-xl bg-muted/25 border border-border/70 text-xs space-y-2.5 font-sans">
@@ -328,6 +427,52 @@ export function QuotaAccountCard({
                       </span>
                       .
                     </p>
+                  </div>
+                </div>
+              ) : snapshot.status === 'ReauthorizationRequired' || (isGooglePrimary && snapshot.errorMessage?.toLowerCase().includes('reauthorization')) ? (
+                <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs space-y-2 font-sans">
+                  <div className="flex items-center gap-1.5 font-semibold text-amber-400 text-xs">
+                    <Icon name="Key" className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>Google Reauthorization Required</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-normal">
+                    {snapshot.errorMessage ||
+                      snapshot.quota?.safeDiagnosticMessage ||
+                      'Your Google authorization has expired or been revoked. Please reconnect your account.'}
+                  </p>
+                  <div className="pt-1">
+                    <Button
+                      size="sm"
+                      onClick={handleConnectGoogleOAuth}
+                      disabled={connectStage === 'connecting'}
+                      className="h-6 text-[11px] px-2.5 bg-amber-600 hover:bg-amber-500 text-white gap-1 font-medium"
+                    >
+                      <Icon name="Key" className="w-3 h-3" />
+                      <span>{connectStage === 'connecting' ? 'Reconnecting...' : 'Reconnect Google Account'}</span>
+                    </Button>
+                  </div>
+                </div>
+              ) : isGooglePrimary ? (
+                <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs space-y-2 font-sans">
+                  <div className="flex items-center gap-1.5 font-semibold text-blue-400 text-xs">
+                    <Icon name="Key" className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                    <span>Google Authentication Required</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-normal">
+                    {snapshot.errorMessage ||
+                      snapshot.quota?.safeDiagnosticMessage ||
+                      'Google OAuth is disconnected or needs re-authentication. Click Connect Google OAuth to authorize.'}
+                  </p>
+                  <div className="pt-1">
+                    <Button
+                      size="sm"
+                      onClick={handleConnectGoogleOAuth}
+                      disabled={connectStage === 'connecting'}
+                      className="h-6 text-[11px] px-2.5 bg-blue-600 hover:bg-blue-500 text-white gap-1"
+                    >
+                      <Icon name="Key" className="w-3 h-3" />
+                      <span>{connectStage === 'connecting' ? 'Connecting...' : 'Connect Google OAuth'}</span>
+                    </Button>
                   </div>
                 </div>
               ) : (
@@ -367,6 +512,37 @@ export function QuotaAccountCard({
               <span>Monitoring is paused for this account.</span>
             </div>
           )}
+
+          {/* Account-Scoped Intelligent Orchestration Alerts */}
+          {snapshot.status === 'Online' && (() => {
+            const alerts = QuotaOrchestrationService.getAccountAlerts(snapshot).filter(
+              (a) => a.type === 'quota_critical' || a.type === 'quota_warning' || a.type === 'reset_imminent'
+            );
+            if (alerts.length === 0) return null;
+            return (
+              <div className="space-y-1.5">
+                {alerts.map((alert) => (
+                  <div
+                    key={alert.id}
+                    className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-sans border ${
+                      alert.severity === 'critical'
+                        ? 'bg-destructive/10 border-destructive/25 text-destructive'
+                        : alert.severity === 'warning'
+                        ? 'bg-warning/10 border-warning/25 text-warning'
+                        : 'bg-primary/10 border-primary/20 text-primary'
+                    }`}
+                  >
+                    <Icon
+                      name={alert.severity === 'critical' || alert.severity === 'warning' ? 'AlertTriangle' : 'Clock'}
+                      className="w-3.5 h-3.5 shrink-0"
+                    />
+                    <span className="font-semibold">{alert.title}:</span>
+                    <span className="text-[11px] opacity-90">{alert.message}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
 
           {/* Horizontal Quota Pool Groups Grid */}
           {(() => {
@@ -554,49 +730,62 @@ export function QuotaAccountCard({
 
           <div className="flex items-center gap-2">
             {(!snapshot.quota || snapshot.status !== 'Online') && (
-              <Button
-                onClick={handleConnectLocalAntigravity}
-                disabled={connectStage !== 'idle' && connectStage !== 'failed'}
-                size="sm"
-                className="h-7 px-3 text-xs font-medium gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 transition-all shadow-xs"
-              >
-                {connectStage === 'idle' && (
-                  <>
-                    <Icon name="Cpu" className="w-3.5 h-3.5" />
-                    <span>Connect Antigravity</span>
-                  </>
-                )}
-                {connectStage === 'detecting' && (
-                  <>
-                    <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
-                    <span>Detecting...</span>
-                  </>
-                )}
-                {connectStage === 'connecting' && (
-                  <>
-                    <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
-                    <span>Connecting...</span>
-                  </>
-                )}
-                {connectStage === 'reading' && (
-                  <>
-                    <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
-                    <span>Reading Quota...</span>
-                  </>
-                )}
-                {connectStage === 'connected' && (
-                  <>
-                    <Icon name="CheckCircle" className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Connected</span>
-                  </>
-                )}
-                {connectStage === 'failed' && (
-                  <>
-                    <Icon name="RefreshCw" className="w-3.5 h-3.5" />
-                    <span>Retry Detection</span>
-                  </>
-                )}
-              </Button>
+              <>
+                <Button
+                  onClick={handleConnectGoogleOAuth}
+                  disabled={connectStage !== 'idle' && connectStage !== 'failed'}
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2.5 text-xs font-medium gap-1.5 border-blue-500/30 text-blue-400 hover:bg-blue-500/10 transition-all shadow-xs"
+                >
+                  <Icon name="Key" className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Connect Google</span>
+                </Button>
+
+                <Button
+                  onClick={handleConnectLocalAntigravity}
+                  disabled={connectStage !== 'idle' && connectStage !== 'failed'}
+                  size="sm"
+                  className="h-7 px-3 text-xs font-medium gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 transition-all shadow-xs"
+                >
+                  {connectStage === 'idle' && (
+                    <>
+                      <Icon name="Cpu" className="w-3.5 h-3.5" />
+                      <span>Connect Antigravity</span>
+                    </>
+                  )}
+                  {connectStage === 'detecting' && (
+                    <>
+                      <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
+                      <span>Detecting...</span>
+                    </>
+                  )}
+                  {connectStage === 'connecting' && (
+                    <>
+                      <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
+                      <span>Connecting...</span>
+                    </>
+                  )}
+                  {connectStage === 'reading' && (
+                    <>
+                      <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
+                      <span>Reading Quota...</span>
+                    </>
+                  )}
+                  {connectStage === 'connected' && (
+                    <>
+                      <Icon name="CheckCircle" className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Connected</span>
+                    </>
+                  )}
+                  {connectStage === 'failed' && (
+                    <>
+                      <Icon name="RefreshCw" className="w-3.5 h-3.5" />
+                      <span>Retry Detection</span>
+                    </>
+                  )}
+                </Button>
+              </>
             )}
 
             <Button
@@ -664,7 +853,15 @@ export function QuotaAccountCard({
   );
 }
 
-function StatusBadge({ status, errorMessage }: { status: AccountPollingState; errorMessage?: string | null }) {
+function StatusBadge({
+  status,
+  errorMessage,
+  isGooglePrimary,
+}: {
+  status: AccountPollingState;
+  errorMessage?: string | null;
+  isGooglePrimary?: boolean;
+}) {
   switch (status) {
     case 'Online':
       return (
@@ -680,12 +877,27 @@ function StatusBadge({ status, errorMessage }: { status: AccountPollingState; er
           Restoring...
         </span>
       );
+    case 'ReauthorizationRequired':
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30 shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+          Reauthorization Required
+        </span>
+      );
     case 'AuthRequired':
+      if (isGooglePrimary) {
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/15 text-blue-400 border border-blue-500/30 shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+            Google Auth Required
+          </span>
+        );
+      }
       if (errorMessage?.includes('Account mismatch')) {
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-warning/10 text-warning border border-warning/30 shrink-0">
             <span className="w-1.5 h-1.5 rounded-full bg-warning" />
-            Antigravity Offline
+            Account Mismatch
           </span>
         );
       }

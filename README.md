@@ -188,29 +188,55 @@ npm run dev
 npm run tauri dev
 ```
 
-## 🛣 Roadmap phát triển
+## 🚀 Các Tính Năng Đã Triển Khai (Implemented Features)
 
-**Version 1 (Hoàn thành kiến trúc)**
-- [x] Thiết lập Clean Architecture, phân lớp rạch ròi.
-- [x] Định nghĩa Domain Layer (Entities).
-- [x] Tạo Desktop/IPC Adapter Layer.
-- [x] Xây dựng UI Foundation & Design System (Mock Data).
+### 1. 📊 Multi-Account AI Quota & Cloud Monitoring (AG-9.0 → AG-9.96)
+- **Multi-Account OAuth & Discovery:** Quản lý đồng thời nhiều tài khoản Google Cloud Code & Antigravity với cơ chế tự động phát hiện (Zero-config discovery) và token refresh lifecycle.
+- **Smart Polling Engine:** Động cơ polling nền tự động điều chỉnh chu kỳ, hỗ trợ reconnect tự động khi khởi động và quản lý trạng thái tài khoản.
+- **Real-time Quota Dashboard & Insights:** Hiển thị trực quan hạn ngạch (Quota limit, usage, reset window), biểu đồ xu hướng, cảnh báo thông minh (Smart Alerts) và gợi ý tài khoản tối ưu.
 
-**Version 2 (Core Features - Process Manager)**
-- [ ] Gắn IPC thực tế vào backend Rust.
-- [ ] Quét và tự nhận diện dự án trong thư mục `E:\Github project`.
-- [ ] Tính năng Start/Stop/Restart cho Process.
-- [ ] Hiển thị danh sách tiến trình và trạng thái.
+### 2. 🛡️ Security Engine & Vulnerability Scanner
+- **Secret & Credential Scanner:** Phát hiện lộ lọt API keys, tokens, SSH keys, chứng chỉ bảo mật trong mã nguồn.
+- **Dependency & Configuration Scanner:** Quét lỗ hổng thư viện phụ thuộc (tích hợp OSV database) và phát hiện cấu hình thiếu an toàn.
+- **Git Exposure & Scope Analysis:** Kiểm tra rò rỉ lịch sử commit, file `.git`, và kiểm soát phạm vi quét (Folder Scope / Exclusion Filters).
+- **Evidence-Based Findings:** Báo cáo chi tiết vị trí lỗ hổng kèm mã minh chứng (Evidence tracking) và hướng dẫn khắc phục cụ thể.
 
-**Version 3 (Advanced Monitoring & Terminal)**
-- [ ] Gắn Terminal UI tích hợp.
-- [ ] Đọc và hiển thị Log stream (Real-time).
-- [ ] Hiển thị Process Info (RAM, CPU Usage).
+### 3. ⚙️ CI/CD Pipeline Engine & Scope Discovery
+- **Project Intelligence & Scope Discovery:** Tự động phân tích cấu trúc dự án (Node.js, Rust, Python, Go...), nhận diện build tools và dependencies để tổng hợp pipeline.
+- **Multi-Platform Pipeline Generator:** Tạo cấu hình CI/CD tự động cho **GitHub Actions**, **GitLab CI** và **Generic Shell Runner**.
+- **Pipeline History & Audit:** Lưu vết lịch sử thực thi, so sánh phiên bản cấu hình (diff viewer) và thống kê chỉ số sức khỏe (Health Stats).
 
-**Version 4 (Mở rộng & AI)**
-- [ ] Quản lý Docker/Git cơ bản.
-- [ ] Tích hợp AI để gợi ý fix lỗi dựa trên Logs.
-- [ ] Hỗ trợ cấu hình Multi-workspace.
+### 4. 🔒 Zero-Trust Policy Engine & Governance
+- **Policy Authorization Gate:** Cơ chế phân quyền dựa trên chính sách (Policy-based authorization) kiểm soát mọi lệnh thực thi trước khi chạy.
+- **Deep Security Hardening:** Chống Command Injection, Path Traversal, SSRF & Local Network Exfiltration (chặn IP nội bộ, loopback, AWS metadata).
+- **Cryptographic Human-in-the-Loop:** Cơ chế phê duyệt bước rủi ro cao với chữ ký mật mã HMAC-SHA256 chống giả mạo token phê duyệt.
+
+### 5. 🚢 Deployment Orchestration Layer
+- **State Machine Lifecycle:** Quản lý vòng đời triển khai chặt chẽ (`Created` → `Validating` → `WaitingApproval` → `Approved` → `Running` → `Succeeded` / `Failed` / `Cancelled`).
+- **Preflight Validation:** Xác thực môi trường, kiểm tra secret references (`secret://env:...`), và kiểm tra tương thích target trước khi kích hoạt.
+- **Multi-Provider Dispatch:** Hỗ trợ kích hoạt deploy qua GitHub Actions REST API (`workflow_dispatch`), GitLab CI API, và Shell Executor nội bộ.
+- **Persistent History:** Lưu trữ lịch sử triển khai cục bộ (`.dcc/deployment_history.json`) với giới hạn tự động.
+
+### 6. 🖥️ Process Controller & Runtime Registry
+- **Process Lifecycle:** Khởi động, dừng, ép tắt (Force Kill), và khởi động lại các tiến trình phát triển độc lập.
+- **Resource Monitoring Worker:** Giám sát mức tiêu thụ tài nguyên hệ thống (RAM, CPU) theo thời gian thực.
+- **Unified Error Handling:** Chuẩn hóa lỗi hệ thống qua `DesktopError` Struct (Rust) sang DTO (TypeScript).
+
+---
+
+## 🛣 Roadmap & Trạng thái phát triển (Development Status)
+
+- [x] **Phase 1: Architecture Foundation** — Clean Architecture, Domain Entities, IPC Adapter Layer, Atomic UI Design System.
+- [x] **Phase 2: Process Management & Runtime** — Process Controller, Process Manager, Runtime Registry, IPC Error Normalization.
+- [x] **Phase 3: Resource & System Monitor** — CPU/RAM live tracking, watched PIDs background worker.
+- [x] **Phase 4: Multi-Account AI Quota Engine** — Google OAuth, Token Lifecycle, Cloud Code integration, Quota Dashboard v2.
+- [x] **Phase 5: Security Engine & Scanner** — Secret scanner, Dependency scanner (OSV), Configuration scanner, Git exposure audit.
+- [x] **Phase 6: Project Intelligence & Pipeline Synthesis** — Scope analyzer, Rule-based generator, Multi-format exporter.
+- [x] **Phase 7: Policy & Zero-Trust Governance** — Policy Engine, Command/SSRF protection, Cryptographic approvals (HMAC).
+- [x] **Phase 8: Deployment Orchestration Layer** — State machine, Preflight validator, Multi-provider triggers, Deployment store.
+- [ ] **Phase 9: Full Frontend UI Binding for Deployments** — Kết nối giao diện Recent Deployments vào API backend Rust thực tế.
+
+---
 
 ### Error Handling & Validation
 Mọi lỗi từ Rust được chuẩn hóa qua DesktopError Struct (Rust) sang DesktopError DTO (TypeScript):
@@ -220,4 +246,5 @@ export interface DesktopError {
   message: string;
 }
 ```
-Điều này đảm bảo Frontend luôn nhận được error object cấu trúc rõ ràng thay vì các string lỗi thô.
+Điều này đảm bảo Frontend luôn nhận được error object cấu trúc rõ ràng thay vì các string lỗi thô.
+

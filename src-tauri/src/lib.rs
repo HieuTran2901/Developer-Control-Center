@@ -183,6 +183,9 @@ pub fn run() {
             monitor::quota_start_monitoring_cmd,
             monitor::quota_stop_monitoring_cmd,
             monitor::quota_connect_google_account_cmd,
+            monitor::quota_connect_antigravity_account_cmd,
+            monitor::quota_disconnect_google_account_cmd,
+            monitor::quota_get_google_connection_status_cmd,
             monitor::verify_antigravity_oauth_configuration_cmd,
 
             ping_command,

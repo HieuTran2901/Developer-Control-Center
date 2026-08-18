@@ -156,39 +156,46 @@ export const PipelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [selectedProject?.id]);
 
   useEffect(() => {
-    // Event listener setup
-    let unlisten: UnlistenFn | undefined;
+    let isMounted = true;
+    let unlistenFn: UnlistenFn | null = null;
 
-    const setupListener = async () => {
-      unlisten = await listen('pipeline_event', (event) => {
-        const payload: any = event.payload;
-        console.log('Received pipeline event:', payload);
-        
-        // Handle Policy Approval
-        if (payload.type === 'policyApprovalRequired') {
-          // Open dialog globally (we can dispatch a custom event or set a state for it)
-          window.dispatchEvent(new CustomEvent('pipeline:approval-required', { detail: payload.payload }));
-        }
-        
-        // Handle Status Updates
-        if (payload.type === 'pipelineStarted' || payload.type === 'pipelineCompleted' || payload.type === 'pipelineFailed') {
-          // Fetch updated health stats or update local active executions
-          invoke<ExecutionStateDto>('get_pipeline_execution_state', { executionId: payload.payload.executionId })
-            .then(state => {
-              setActiveExecutions(prev => ({
-                ...prev,
-                [state.executionId]: state
-              }));
-            })
-            .catch(console.error);
-        }
-      });
-    };
-
-    setupListener();
+    listen('pipeline_event', (event) => {
+      if (!isMounted) return;
+      const payload: any = event.payload;
+      console.log('Received pipeline event:', payload);
+      
+      // Handle Policy Approval
+      if (payload.type === 'policyApprovalRequired') {
+        // Open dialog globally (we can dispatch a custom event or set a state for it)
+        window.dispatchEvent(new CustomEvent('pipeline:approval-required', { detail: payload.payload }));
+      }
+      
+      // Handle Status Updates
+      if (payload.type === 'pipelineStarted' || payload.type === 'pipelineCompleted' || payload.type === 'pipelineFailed') {
+        // Fetch updated health stats or update local active executions
+        invoke<ExecutionStateDto>('get_pipeline_execution_state', { executionId: payload.payload.executionId })
+          .then(state => {
+            if (!isMounted) return;
+            setActiveExecutions(prev => ({
+              ...prev,
+              [state.executionId]: state
+            }));
+          })
+          .catch(console.error);
+      }
+    }).then((unsub) => {
+      if (!isMounted) {
+        unsub();
+      } else {
+        unlistenFn = unsub;
+      }
+    }).catch(console.error);
 
     return () => {
-      if (unlisten) unlisten();
+      isMounted = false;
+      if (unlistenFn) {
+        unlistenFn();
+      }
     };
   }, []);
 
