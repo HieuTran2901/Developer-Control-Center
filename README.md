@@ -77,7 +77,7 @@ E:\Github project\Developer-Control-Center\
 
 1. **Domain (`domain/`)**: Chứa định nghĩa dữ liệu (Interfaces/Types), không chứa bất kỳ logic UI hay framework nào.
 2. **Desktop (`desktop/`)**: Là adapter duy nhất giao tiếp với Rust/Tauri API. React không được gọi Tauri API ngoài module này.
-3. **Shared (`shared/`)**: Chứa các component ngớ ngẩn (Dumb components), hook tiện ích. Tuyệt đối không chứa business logic cụ thể của một feature.
+3. **Shared (`shared/`)**: Chứa các component dùng chung (reusable components) và các hook tiện ích, không chứa business logic đặc thù của từng feature.
 4. **Features (`features/`)**: Chứa logic độc lập của từng chức năng. Các feature KHÔNG được import chéo nhau quá sâu (chỉ nên giao tiếp qua Shared hoặc Domain).
 
 ## 📝 Naming & Coding Convention
@@ -247,4 +247,4 @@ export interface DesktopError {
 }
 ```
 Điều này đảm bảo Frontend luôn nhận được error object cấu trúc rõ ràng thay vì các string lỗi thô.
-
+
