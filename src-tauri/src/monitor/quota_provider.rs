@@ -212,7 +212,7 @@ impl QuotaProviderRegistry {
         let mut providers: HashMap<QuotaProviderId, Arc<dyn QuotaProvider>> = HashMap::new();
         providers.insert(
             QuotaProviderId::Antigravity,
-            Arc::new(crate::monitor::providers::AntigravityQuotaProvider::new()),
+            Arc::new(crate::monitor::providers::AntigravityQuotaProvider::with_credential_storage(credential_storage.clone())),
         );
         providers.insert(
             QuotaProviderId::GoogleCloudCode,
