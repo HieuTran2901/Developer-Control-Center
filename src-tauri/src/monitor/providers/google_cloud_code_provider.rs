@@ -242,8 +242,7 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
                     "metadata": {
                         "ideType": "ANTIGRAVITY",
                         "ideVersion": "2.8.1",
-                        "pluginType": "GEMINI",
-                        "subclientType": "HUB"
+                        "pluginType": "GEMINI"
                     }
                 });
                 if let Some(ref p) = proj {
@@ -282,8 +281,8 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
         if let Some((_, ref resp)) = load_result {
             if resp.status().as_u16() == 403 && active_project_id.is_some() {
                 eprintln!(
-                    "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source=explicit_account_setting_forbidden oauth_scopes=userinfo.email,cloud-platform,openid endpoint=loadCodeAssist http_status=403 error_kind=Forbidden_FallbackToAutoDiscovery",
-                    account_id, expected_email, active_project_id
+                    "[CLOUD-DIRECT-DISCOVERY]\naccount_id={}\nexpected_email={:?}\ncredential_found=true\ntoken_refresh=success\nload_code_assist_status=403\ndiscovered_project_id=None\ndiscovered_project_source=explicit_account_setting_forbidden\ndiscovered_project_owner={:?}\nidentity_match=true",
+                    account_id, expected_email, authenticated_email
                 );
                 active_project_id = None;
                 project_source = "auto_discovery_fallback";
@@ -295,8 +294,8 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
             Some((url, r)) => (url, r),
             None => {
                 eprintln!(
-                    "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source={} oauth_scopes=userinfo.email,cloud-platform,openid endpoint=loadCodeAssist http_status=0 error_kind=NetworkError",
-                    account_id, expected_email, active_project_id, project_source
+                    "[CLOUD-DIRECT-DISCOVERY]\naccount_id={}\nexpected_email={:?}\ncredential_found=true\ntoken_refresh=success\nload_code_assist_status=0\ndiscovered_project_id=None\ndiscovered_project_source={}\ndiscovered_project_owner={:?}\nidentity_match=false",
+                    account_id, expected_email, project_source, authenticated_email
                 );
                 return Err(QuotaProviderError {
                     kind: QuotaProviderErrorKind::NetworkError,
@@ -306,36 +305,17 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
         };
 
         let load_status = load_resp.status();
-        if load_status.as_u16() == 401 {
-            eprintln!(
-                "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source={} oauth_scopes=userinfo.email,cloud-platform,openid endpoint=loadCodeAssist http_status=401 error_kind=Unauthorized",
-                account_id, expected_email, active_project_id, project_source
-            );
-            return Err(QuotaProviderError {
-                kind: QuotaProviderErrorKind::Unauthorized,
-                message: "Cloud Code API unauthorized. Refresh token may be expired or revoked.".to_string(),
-            });
-        }
-        if load_status.as_u16() == 403 {
-            eprintln!(
-                "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source={} oauth_scopes=userinfo.email,cloud-platform,openid endpoint=loadCodeAssist http_status=403 error_kind=Forbidden",
-                account_id, expected_email, active_project_id, project_source
-            );
-            return Err(QuotaProviderError {
-                kind: QuotaProviderErrorKind::Forbidden,
-                message: "Cloud Code API access forbidden. Account may lack required permissions or GCP Project ID is invalid.".to_string(),
-            });
-        }
+        let load_body_text = load_resp.text().await.unwrap_or_default();
 
         let mut resolved_project_id: Option<String> = active_project_id.clone();
         let mut tier: Option<String> = None;
 
         if load_status.is_success() {
-            if let Ok(load_v) = load_resp.json::<serde_json::Value>().await {
+            if let Ok(load_v) = serde_json::from_str::<serde_json::Value>(&load_body_text) {
                 if let Some(p) = load_v.get("cloudaicompanionProject").and_then(|s| s.as_str()) {
                     if resolved_project_id.is_none() {
                         resolved_project_id = Some(p.to_string());
-                        project_source = "google_cloud_code_auto_discovered";
+                        project_source = "auto_discovered";
                     }
                 }
                 if let Some(t) = load_v.get("currentTier") {
@@ -344,6 +324,31 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
                     tier = Some(t_str.to_string());
                 }
             }
+        }
+
+        eprintln!(
+            "[CLOUD-DIRECT-DISCOVERY]\naccount_id={}\nexpected_email={:?}\ncredential_found=true\ntoken_refresh=success\nload_code_assist_status={}\ndiscovered_project_id={:?}\ndiscovered_project_source={}\ndiscovered_project_owner={:?}\nidentity_match={}",
+            account_id,
+            expected_email,
+            load_status.as_u16(),
+            resolved_project_id,
+            project_source,
+            authenticated_email,
+            expected_email.map(|exp| exp.trim().to_ascii_lowercase() == authenticated_email.trim().to_ascii_lowercase()).unwrap_or(true)
+        );
+
+        if load_status.as_u16() == 401 {
+            return Err(QuotaProviderError {
+                kind: QuotaProviderErrorKind::Unauthorized,
+                message: "Cloud Code API unauthorized. Refresh token may be expired or revoked.".to_string(),
+            });
+        }
+        if load_status.as_u16() == 403 {
+            let sanitized_err = sanitize_error_message(&load_body_text);
+            return Err(QuotaProviderError {
+                kind: QuotaProviderErrorKind::Forbidden,
+                message: format!("Cloud Code API access forbidden: {}", sanitized_err),
+            });
         }
 
         // 5. Query Cloud Code retrieveUserQuotaSummary endpoint for live quota metrics
@@ -376,8 +381,8 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
 
         let mut summary_resp = attempt_retrieve_summary(resolved_project_id.clone()).await.map_err(|e| {
             eprintln!(
-                "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source={} oauth_scopes=userinfo.email,cloud-platform,openid endpoint={} http_status=0 error_kind=NetworkError",
-                account_id, expected_email, resolved_project_id, project_source, quota_summary_url
+                "[CLOUD-DIRECT-REQUEST]\naccount_id={}\nproject_id={:?}\nproject_source={}\npayload_project_present={}\nuser_project_header_present={}\nhttp_status=0\nerror_kind=NetworkError",
+                account_id, resolved_project_id, project_source, resolved_project_id.is_some(), resolved_project_id.is_some()
             );
             QuotaProviderError {
                 kind: QuotaProviderErrorKind::NetworkError,
@@ -388,8 +393,8 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
         // If explicit project returned HTTP 403 on retrieveUserQuotaSummary, retry without explicit project
         if summary_resp.status().as_u16() == 403 && project_source == "explicit_account_setting" {
             eprintln!(
-                "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source=explicit_account_setting_forbidden oauth_scopes=userinfo.email,cloud-platform,openid endpoint={} http_status=403 error_kind=Forbidden_FallbackToAutoDiscovery",
-                account_id, expected_email, resolved_project_id, quota_summary_url
+                "[CLOUD-DIRECT-REQUEST]\naccount_id={}\nproject_id={:?}\nproject_source=explicit_account_setting_forbidden\npayload_project_present=true\nuser_project_header_present=true\nhttp_status=403\nerror_kind=Forbidden_FallbackToAutoDiscovery",
+                account_id, resolved_project_id
             );
             resolved_project_id = None;
             project_source = "auto_discovery_fallback";
@@ -400,12 +405,12 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
 
         let summary_status = summary_resp.status();
         eprintln!(
-            "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source={} oauth_scopes=userinfo.email,cloud-platform,openid endpoint={} http_status={} error_kind={}",
+            "[CLOUD-DIRECT-REQUEST]\naccount_id={}\nproject_id={:?}\nproject_source={}\npayload_project_present={}\nuser_project_header_present={}\nhttp_status={}\nerror_kind={}",
             account_id,
-            expected_email,
             resolved_project_id,
             project_source,
-            quota_summary_url,
+            resolved_project_id.is_some(),
+            resolved_project_id.is_some(),
             summary_status.as_u16(),
             if summary_status.is_success() { "none" } else if summary_status.as_u16() == 403 { "Forbidden" } else if summary_status.as_u16() == 401 { "Unauthorized" } else { "UnsupportedResponse" }
         );
