@@ -16,7 +16,7 @@ export type AlertSeverity = 'info' | 'warning' | 'critical';
 export interface AccountAlert {
   id: string;
   accountId: string;
-  type: 'auth_required' | 'reauth_required' | 'identity_mismatch' | 'quota_warning' | 'quota_critical' | 'reset_imminent' | 'stale_data';
+  type: 'auth_required' | 'reauth_required' | 'api_forbidden' | 'identity_mismatch' | 'quota_warning' | 'quota_critical' | 'reset_imminent' | 'stale_data';
   severity: AlertSeverity;
   title: string;
   message: string;
@@ -245,6 +245,18 @@ export class QuotaOrchestrationService {
         severity: 'critical',
         title: 'Reauthorization Required',
         message: 'Google OAuth token expired or revoked. Please reconnect.',
+      });
+      return alerts;
+    }
+
+    if (snapshot.status === 'Forbidden') {
+      alerts.push({
+        id: `${idPrefix}-forbidden`,
+        accountId: snapshot.accountId,
+        type: 'api_forbidden',
+        severity: 'warning',
+        title: 'Google API Access Denied',
+        message: snapshot.errorMessage || 'Google account is authenticated, but Google Cloud denied access to quota summary (HTTP 403 Forbidden).',
       });
       return alerts;
     }

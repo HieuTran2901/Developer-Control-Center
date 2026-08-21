@@ -40,13 +40,27 @@ impl std::fmt::Display for DiscoveryError {
 
 impl std::error::Error for DiscoveryError {}
 
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+static RUNTIMES_CACHE: Mutex<Option<(Instant, Vec<AntigravityRuntime>)>> = Mutex::new(None);
+const RUNTIMES_CACHE_TTL: Duration = Duration::from_secs(4);
+
 pub struct AntigravityDiscovery;
 
 impl AntigravityDiscovery {
     /// Discover all running Antigravity Language Server runtime instances
     pub fn discover_all_runtimes() -> Result<Vec<AntigravityRuntime>, DiscoveryError> {
-        let mut sys = System::new_all();
-        sys.refresh_all();
+        if let Ok(guard) = RUNTIMES_CACHE.lock() {
+            if let Some((cached_at, ref runtimes)) = *guard {
+                if cached_at.elapsed() < RUNTIMES_CACHE_TTL && !runtimes.is_empty() {
+                    return Ok(runtimes.clone());
+                }
+            }
+        }
+
+        let mut sys = System::new();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
         let mut candidate_processes = Vec::new();
 
@@ -137,6 +151,9 @@ impl AntigravityDiscovery {
 
         // Sort deterministically by PID ASC
         runtimes.sort_by_key(|r| r.process_id);
+        if let Ok(mut guard) = RUNTIMES_CACHE.lock() {
+            *guard = Some((Instant::now(), runtimes.clone()));
+        }
         Ok(runtimes)
     }
 
@@ -150,6 +167,14 @@ impl AntigravityDiscovery {
                 kind: DiscoveryErrorKind::LanguageServerNotFound,
                 message: "No Antigravity Language Server instance found.".to_string(),
             })
+    }
+
+    /// Invalidate the runtime discovery cache immediately (e.g. when a cached runtime
+    /// fails to respond, indicating Antigravity restarted with new credentials).
+    pub fn invalidate_cache() {
+        if let Ok(mut guard) = RUNTIMES_CACHE.lock() {
+            *guard = None;
+        }
     }
 
     /// Extract the value of `--csrf_token <UUID>` from command line string

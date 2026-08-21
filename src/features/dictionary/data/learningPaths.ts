@@ -1,0 +1,48 @@
+import { LearningPath } from '../domain/entities/LearningPath';
+
+export const LEARNING_PATHS: LearningPath[] = [
+  {
+    id: 'cloud-engineer',
+    title: 'Cloud Engineer Path',
+    description: 'Linux, Networking, AWS EC2, SSM, IAM, Docker, and Production Incident Troubleshooting.',
+    icon: 'Cloud',
+    completedCount: 12,
+    totalCount: 40,
+    categoryIds: ['aws', 'docker', 'cli'],
+    currentTopic: 'AWS EC2 & SSM',
+    nextTopic: 'IAM Fundamentals',
+  },
+  {
+    id: 'devops-journey',
+    title: 'DevOps Journey',
+    description: 'Docker multi-stage builds, Compose orchestration, Git Rebase, CI/CD pipelines, and Nginx.',
+    icon: 'Box',
+    completedCount: 18,
+    totalCount: 45,
+    categoryIds: ['docker', 'git'],
+    currentTopic: 'Docker Compose Production',
+    nextTopic: 'Git Rebase & Merge Conflicts',
+  },
+  {
+    id: 'backend-developer',
+    title: 'Backend Developer',
+    description: 'Node.js runtime, Spring Boot APIs, Environment variables, Tauri desktop integration, and Port conflict debugging.',
+    icon: 'Server',
+    completedCount: 9,
+    totalCount: 30,
+    categoryIds: ['backend', 'cli'],
+    currentTopic: 'Spring Boot REST APIs',
+    nextTopic: 'Port Conflict EADDRINUSE',
+  },
+  {
+    id: 'frontend-developer',
+    title: 'Frontend Developer',
+    description: 'React components, 7 core Hooks, Vite Dev Proxy, Environment variables, and Production Checklist.',
+    icon: 'Layout',
+    completedCount: 14,
+    totalCount: 35,
+    categoryIds: ['frontend'],
+    currentTopic: 'React Hooks Masterclass',
+    nextTopic: 'Vite Development Proxy',
+  },
+];

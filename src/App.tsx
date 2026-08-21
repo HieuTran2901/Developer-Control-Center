@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, lazy, Suspense } from 'react';
 import { setupDesktopIpc } from './desktop/ipc';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { MainLayout } from './shared/components/layouts/MainLayout';
@@ -11,6 +11,10 @@ import { ToastProvider } from './shared/hooks/useToast';
 import { SecurityOverview } from './features/security/pages/SecurityOverview';
 import { CICDOverview } from './features/cicd/pages/CICDOverview';
 import { AIQuotaPage } from './features/quota/pages/AIQuotaPage';
+
+const DictionaryPage = lazy(() =>
+  import('./features/dictionary/pages/DictionaryPage').then((m) => ({ default: m.DictionaryPage }))
+);
 
 export default function App() {
   console.log('[DEBUG 1 App.tsx] App rendering, mounting WorkspaceProvider');
@@ -49,6 +53,14 @@ export default function App() {
               <Route path="security" element={<SecurityOverview />} />
               <Route path="cicd" element={<CICDOverview />} />
               <Route path="ai-quota" element={<AIQuotaPage />} />
+              <Route
+                path="dictionary"
+                element={
+                  <Suspense fallback={<div className="p-8 text-center text-xs text-muted-foreground">Đang tải Từ điển Dev Guide...</div>}>
+                    <DictionaryPage />
+                  </Suspense>
+                }
+              />
               <Route path="settings" element={<Settings />} />
               <Route path="about" element={<PlaceholderPage title="About" icon="Info" />} />
             </Route>
@@ -58,3 +70,4 @@ export default function App() {
     </ToastProvider>
   );
 }
+

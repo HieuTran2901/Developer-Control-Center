@@ -123,20 +123,19 @@ impl ProjectScanner {
             ..Default::default()
         };
 
-        // 1. Detect Git
+        // 1. Fast Safe Git Detection (Read .git/HEAD directly without blocking subprocess hangs)
         let git_dir = root.join(".git");
         if git_dir.exists() {
             intel.git_info.repository = true;
             intel.repository_root = Some(root.to_string_lossy().to_string());
-            if let Ok(output) = std::process::Command::new("git")
-                .arg("rev-parse")
-                .arg("--abbrev-ref")
-                .arg("HEAD")
-                .current_dir(root)
-                .output() {
-                if output.status.success() {
-                    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    intel.git_info.branch = Some(branch);
+            
+            let head_file = git_dir.join("HEAD");
+            if let Ok(head_content) = std::fs::read_to_string(&head_file) {
+                let trimmed = head_content.trim();
+                if trimmed.starts_with("ref: refs/heads/") {
+                    intel.git_info.branch = Some(trimmed.trim_start_matches("ref: refs/heads/").to_string());
+                } else if !trimmed.is_empty() {
+                    intel.git_info.branch = Some(trimmed.chars().take(8).collect());
                 }
             }
         }
@@ -146,22 +145,50 @@ impl ProjectScanner {
 
         let mut component_map = std::collections::HashMap::new();
 
-        // 2. Traversal
-        let walker = WalkDir::new(root).max_depth(3).into_iter();
+        let start_time = std::time::Instant::now();
+        let max_duration = std::time::Duration::from_millis(3000);
+        let max_files = 2500;
+
+        // 2. Traversal with filter_entry to PREVENT WalkDir from entering heavy directories
+        let walker = WalkDir::new(root)
+            .max_depth(3)
+            .into_iter()
+            .filter_entry(|entry| {
+                let file_name = entry.file_name().to_string_lossy();
+                let lower = file_name.to_lowercase();
+                if entry.file_type().is_dir() {
+                    let is_ignored = matches!(
+                        lower.as_str(),
+                        "node_modules"
+                            | "target"
+                            | "dist"
+                            | "build"
+                            | ".git"
+                            | ".idea"
+                            | ".vscode"
+                            | "vendor"
+                            | ".gradle"
+                            | ".mvn"
+                            | "venv"
+                            | ".venv"
+                            | "coverage"
+                            | "__pycache__"
+                    );
+                    !is_ignored
+                } else {
+                    true
+                }
+            });
+
         for entry in walker.filter_map(|e| e.ok()) {
+            if start_time.elapsed() >= max_duration || scanned_count >= max_files {
+                break;
+            }
+
             let path = entry.path();
             let is_dir = entry.file_type().is_dir();
             
-            let path_str = path.to_string_lossy().to_string();
-            if path_str.contains("node_modules") || 
-               path_str.contains("target") || 
-               path_str.contains("dist") || 
-               path_str.contains("build") ||
-               path_str.contains(".git") ||
-               path_str.contains(".idea") ||
-               path_str.contains(".vscode") ||
-               path_str.contains("vendor") {
-                if is_dir { ignored_count += 1; }
+            if is_dir {
                 continue;
             }
 

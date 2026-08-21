@@ -638,6 +638,18 @@
 2. **Zero-Touch Consent Invalidation:** Tự động giải phóng consent cũ để Google Authorization Server cấp phát refresh token mới 100% hợp lệ.
 3. **Strict Invariant & Isolation Preservation:** Bảo toàn tuyệt đối các bất biến I1–I18 và tính cô lập giữa các tài khoản.
 
+## Decision #69
+**Date:** 2026-08-19
+**Title:** Google OAuth Multi-Account Credential Binding & Grant Recovery Fix (AG-9.97)
+**Reason:** Resolution of two critical defects identified during AG-9.96 forensic audit:
+1. **Dynamic Consent Prompt Selection:** Automatically append `prompt=consent select_account` to Google Authorization URLs whenever the target account lacks a healthy, validated refresh token in Keyring or explicitly requests reauthorization. This breaks the infinite `AuthRequired` reconnect loop by forcing Google to issue a fresh `refresh_token`.
+2. **Multi-Account Credential Isolation & Identity Assertion:** Enforce strict account identity guards at the QuotaProvider layer (`quota_provider.rs`) and fail-closed state handling in polling engine (`quota_polling.rs`). Prevent stale cached quota or shared `gemini:antigravity` credentials from leaking across account boundaries.
+**Alternative:** Blindly force `prompt=consent` on all reconnects or ignore account identity mismatches.
+**Impact:**
+1. Zero infinite OAuth reconnect loops.
+2. Complete multi-account identity isolation across all 11 architectural layers.
+
+
 
 
 

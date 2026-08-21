@@ -267,6 +267,7 @@ export function MultiAccountQuotaDashboard({ onSwitchToV1 }: MultiAccountQuotaDa
     (s) =>
       s.status === 'AuthRequired' ||
       s.status === 'ReauthorizationRequired' ||
+      s.status === 'Forbidden' ||
       s.status === 'NetworkError' ||
       s.status === 'ProviderError' ||
       s.status === 'RateLimited' ||
@@ -369,30 +370,6 @@ export function MultiAccountQuotaDashboard({ onSwitchToV1 }: MultiAccountQuotaDa
     return result;
   }, [snapshots, rankedAccounts, currentFilter, searchQuery, currentSort]);
 
-  // Live Auto-Refresh Countdown calculation
-  const [countdownStr, setCountdownStr] = useState<string | null>(null);
-  useEffect(() => {
-    if (!pollingStatus?.autoRefreshEnabled || !pollingStatus?.isRunning) {
-      setCountdownStr(null);
-      return;
-    }
-    const updateCountdown = () => {
-      const now = Math.floor(Date.now() / 1000);
-      let targetTs = pollingStatus.nextGlobalRefreshAt ? Number(pollingStatus.nextGlobalRefreshAt) : null;
-      if (!targetTs && pollingStatus.lastGlobalRefreshAt) {
-        targetTs = Number(pollingStatus.lastGlobalRefreshAt) + pollingStatus.intervalSeconds;
-      }
-      if (!targetTs) targetTs = now + pollingStatus.intervalSeconds;
-      const diff = Math.max(0, targetTs - now);
-      const mins = Math.floor(diff / 60);
-      const secs = diff % 60;
-      setCountdownStr(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
-    };
-    updateCountdown();
-    const interval = setInterval(updateCountdown, 1000);
-    return () => clearInterval(interval);
-  }, [pollingStatus]);
-
   return (
     <div className="space-y-4 font-sans text-foreground">
       {/* Top Header Bar */}
@@ -412,22 +389,7 @@ export function MultiAccountQuotaDashboard({ onSwitchToV1 }: MultiAccountQuotaDa
         {/* Right Header Status & Controls */}
         <div className="flex items-center gap-3 flex-wrap">
           {/* Auto Refresh Status Pill */}
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted/40 border border-border/60 text-xs">
-            <span className="flex h-2 w-2 relative">
-              {pollingStatus?.autoRefreshEnabled && pollingStatus?.isRunning && (
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
-              )}
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${pollingStatus?.autoRefreshEnabled ? 'bg-success' : 'bg-muted-foreground'}`}></span>
-            </span>
-            <span className="font-semibold text-[11px]">
-              Auto Refresh: {pollingStatus?.autoRefreshEnabled ? 'ON' : 'OFF'}
-            </span>
-            {countdownStr && (
-              <span className="text-[11px] text-muted-foreground font-mono pl-1 border-l border-border/60">
-                Next in {countdownStr}
-              </span>
-            )}
-          </div>
+          <AutoRefreshCountdownBadge pollingStatus={pollingStatus} />
 
           {/* Refresh Interval Selector */}
           <div className="flex items-center gap-1.5 text-xs bg-muted/40 border border-border/60 rounded-lg px-2.5 py-1">
@@ -647,6 +609,51 @@ export function MultiAccountQuotaDashboard({ onSwitchToV1 }: MultiAccountQuotaDa
           onAddAccount={handleAddAccount}
           onAccountAdded={handleAccountAdded}
         />
+      )}
+    </div>
+  );
+}
+
+function AutoRefreshCountdownBadge({ pollingStatus }: { pollingStatus: PollingEngineStatus | null }) {
+  const [countdownStr, setCountdownStr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pollingStatus?.autoRefreshEnabled || !pollingStatus?.isRunning) {
+      setCountdownStr(null);
+      return;
+    }
+    const updateCountdown = () => {
+      const now = Math.floor(Date.now() / 1000);
+      let targetTs = pollingStatus.nextGlobalRefreshAt ? Number(pollingStatus.nextGlobalRefreshAt) : null;
+      if (!targetTs && pollingStatus.lastGlobalRefreshAt) {
+        targetTs = Number(pollingStatus.lastGlobalRefreshAt) + pollingStatus.intervalSeconds;
+      }
+      if (!targetTs) targetTs = now + pollingStatus.intervalSeconds;
+      const diff = Math.max(0, targetTs - now);
+      const mins = Math.floor(diff / 60);
+      const secs = diff % 60;
+      setCountdownStr(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+    };
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 1000);
+    return () => clearInterval(interval);
+  }, [pollingStatus?.autoRefreshEnabled, pollingStatus?.isRunning, pollingStatus?.nextGlobalRefreshAt, pollingStatus?.lastGlobalRefreshAt, pollingStatus?.intervalSeconds]);
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted/40 border border-border/60 text-xs">
+      <span className="flex h-2 w-2 relative">
+        {pollingStatus?.autoRefreshEnabled && pollingStatus?.isRunning && (
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+        )}
+        <span className={`relative inline-flex rounded-full h-2 w-2 ${pollingStatus?.autoRefreshEnabled ? 'bg-success' : 'bg-muted-foreground'}`}></span>
+      </span>
+      <span className="font-semibold text-[11px]">
+        Auto Refresh: {pollingStatus?.autoRefreshEnabled ? 'ON' : 'OFF'}
+      </span>
+      {countdownStr && (
+        <span className="text-[11px] text-muted-foreground font-mono pl-1 border-l border-border/60">
+          Next in {countdownStr}
+        </span>
       )}
     </div>
   );

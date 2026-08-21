@@ -12,9 +12,11 @@ const navItems: { icon: IconName; label: string; path: string }[] = [
   { icon: 'Shield', label: 'Security', path: '/security' },
   { icon: 'Workflow', label: 'CI/CD', path: '/cicd' },
   { icon: 'Sparkles', label: 'AI Quota', path: '/ai-quota' },
+  { icon: 'BookOpen', label: 'Dev Guide', path: '/dictionary' },
   { icon: 'Settings', label: 'Settings', path: '/settings' },
   { icon: 'Info', label: 'About', path: '/about' },
 ];
+
 
 export function Sidebar() {
   const [isExpanded, setIsExpanded] = useState(window.innerWidth >= 1366);

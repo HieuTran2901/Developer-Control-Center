@@ -14,19 +14,77 @@ use crate::monitor::quota_provider::{
 };
 
 
+use crate::monitor::antigravity_headless_worker::HeadlessAntigravityManager;
+
 pub struct AntigravityQuotaProvider {
     client: Arc<AntigravityQuotaClient>,
+    headless_manager: Arc<HeadlessAntigravityManager>,
 }
 
 impl AntigravityQuotaProvider {
     pub fn new() -> Self {
         Self {
             client: Arc::new(AntigravityQuotaClient::new()),
+            headless_manager: Arc::new(HeadlessAntigravityManager::new()),
         }
     }
 
     pub fn with_client(client: Arc<AntigravityQuotaClient>) -> Self {
-        Self { client }
+        Self {
+            client,
+            headless_manager: Arc::new(HeadlessAntigravityManager::new()),
+        }
+    }
+
+    pub fn map_snapshot_to_quota_status(
+        account_id: &str,
+        expected_email: Option<&str>,
+        snap: crate::monitor::antigravity_quota::AntigravityQuotaSnapshot,
+        success_msg: &str,
+    ) -> QuotaStatus {
+        let runtime_email_raw = snap
+            .account_identity
+            .clone()
+            .unwrap_or_else(|| expected_email.unwrap_or("unknown@antigravity.local").to_string());
+
+        let mut models = Vec::new();
+        for m in snap.models {
+            let fraction = m.remaining_fraction;
+            let percentage = m
+                .remaining_percent
+                .or_else(|| fraction.map(|f| (f * 100.0).round()));
+
+            let weekly_fraction = m.weekly_remaining_fraction;
+            let weekly_percentage = m
+                .weekly_remaining_percent
+                .or_else(|| weekly_fraction.map(|f| (f * 100.0).round()));
+
+            models.push(ModelQuota {
+                model_id: m.model_id.clone(),
+                display_name: m.display_name.unwrap_or(m.model_id),
+                remaining_fraction: fraction,
+                remaining_percentage: percentage,
+                reset_at: m.reset_time,
+                status: ModelQuotaStatus::Available,
+                weekly_remaining_fraction: weekly_fraction,
+                weekly_remaining_percentage: weekly_percentage,
+                weekly_reset_at: m.weekly_reset_time,
+                windows: m.windows,
+            });
+        }
+
+        QuotaStatus {
+            account_id: account_id.to_string(),
+            email: runtime_email_raw,
+            tier: snap.plan_name.or(snap.tier),
+            provider: "Antigravity Local Runtime".to_string(),
+            models,
+            fetched_at: snap.fetched_at,
+            status: ModelQuotaStatus::Available,
+            data_source: QuotaDataSource::RealProvider,
+            data_quality: QuotaDataQuality::Live,
+            safe_diagnostic_message: Some(success_msg.to_string()),
+        }
     }
 }
 
@@ -40,6 +98,7 @@ impl QuotaProvider for AntigravityQuotaProvider {
         &self,
         account_id: &str,
         expected_email: Option<&str>,
+        _project_id: Option<&str>,
     ) -> Result<QuotaStatus, QuotaProviderError> {
         let normalized_expected = expected_email
             .map(|e| e.trim().to_ascii_lowercase())
@@ -55,28 +114,12 @@ impl QuotaProvider for AntigravityQuotaProvider {
             None => true,
         };
 
-        let runtimes = match AntigravityDiscovery::discover_all_runtimes() {
-            Ok(r) => r,
-            Err(e) => {
-                let exp_display = expected_email.unwrap_or("configured account");
-                let status = QuotaStatus {
-                    account_id: account_id.to_string(),
-                    email: exp_display.to_string(),
-                    tier: None,
-                    provider: "Antigravity Local Runtime".to_string(),
-                    models: vec![],
-                    fetched_at: current_unix_timestamp().to_string(),
-                    status: ModelQuotaStatus::Unavailable,
-                    data_source: QuotaDataSource::Unavailable,
-                    data_quality: QuotaDataQuality::Unavailable,
-                    safe_diagnostic_message: Some(e.message),
-                };
-                return Ok(status);
-            }
-        };
+        // 1. Try to find an existing running Antigravity IDE instance
+        // Note: discover_all_runtimes may return a cached result; find_matching_runtime_for_email
+        // will invalidate the cache if all cached runtimes are unresponsive (e.g. after account switch).
+        let mut runtimes = AntigravityDiscovery::discover_all_runtimes().unwrap_or_default();
 
-        // Resolve target runtime matching expected_email
-        let target_runtime = if is_placeholder && account_id == "default" {
+        let mut target_runtime = if is_placeholder && account_id == "default" {
             runtimes.first().cloned()
         } else if let Some(ref exp) = normalized_expected {
             self.client.find_matching_runtime_for_email(exp, &runtimes).await
@@ -84,9 +127,68 @@ impl QuotaProvider for AntigravityQuotaProvider {
             runtimes.first().cloned()
         };
 
-        let runtime = match target_runtime {
-            Some(r) => r,
-            None => {
+        // If cache was invalidated (all runtimes were stale), do an immediate fresh rediscovery
+        if target_runtime.is_none() && !runtimes.is_empty() {
+            runtimes = AntigravityDiscovery::discover_all_runtimes().unwrap_or_default();
+            target_runtime = if is_placeholder && account_id == "default" {
+                runtimes.first().cloned()
+            } else if let Some(ref exp) = normalized_expected {
+                self.client.find_matching_runtime_for_email(exp, &runtimes).await
+            } else {
+                runtimes.first().cloned()
+            };
+        }
+
+        // 2. If an active runtime is available, query it directly
+        if let Some(runtime) = target_runtime {
+            if let Ok(snap) = self.client.fetch_quota_from_runtime(&runtime).await {
+                // Snapshot the active IDE session for this account immediately (async, fire-and-forget)
+                // This ensures subsequent headless worker calls use the correct token.
+                HeadlessAntigravityManager::snapshot_active_session_to_account(account_id);
+                return Ok(Self::map_snapshot_to_quota_status(
+                    account_id,
+                    expected_email,
+                    snap,
+                    "Synchronized live quota from running Antigravity Language Server.",
+                ));
+            }
+        }
+
+
+        // 3. If no active IDE runtime matches, query via Headless Worker for this account
+        match self.headless_manager.fetch_quota_for_account(account_id).await {
+            Ok(snap) => {
+                let snap_email_norm = snap.account_identity.as_deref().map(|e| e.trim().to_ascii_lowercase());
+                if let (Some(expected), Some(actual)) = (normalized_expected.as_deref(), snap_email_norm.as_deref()) {
+                    if !is_placeholder && expected != actual {
+                        let exp_display = expected_email.unwrap_or(account_id);
+                        let diagnostic_msg = format!(
+                            "Antigravity is currently authenticated as {} on this PC. Switch to {} in Antigravity to sync its live quota.",
+                            actual, exp_display
+                        );
+                        return Ok(QuotaStatus {
+                            account_id: account_id.to_string(),
+                            email: exp_display.to_string(),
+                            tier: None,
+                            provider: "Antigravity Local Runtime".to_string(),
+                            models: vec![],
+                            fetched_at: current_unix_timestamp().to_string(),
+                            status: ModelQuotaStatus::AuthRequired,
+                            data_source: QuotaDataSource::Unavailable,
+                            data_quality: QuotaDataQuality::Unavailable,
+                            safe_diagnostic_message: Some(diagnostic_msg),
+                        });
+                    }
+                }
+
+                return Ok(Self::map_snapshot_to_quota_status(
+                    account_id,
+                    expected_email,
+                    snap,
+                    "Synchronized quota via background Headless Antigravity Worker.",
+                ));
+            }
+            Err(e) => {
                 let exp_display = expected_email.unwrap_or("configured account");
                 let running_email = if let Some(first_rt) = runtimes.first() {
                     self.client.get_runtime_email(first_rt).await.ok()
@@ -94,15 +196,23 @@ impl QuotaProvider for AntigravityQuotaProvider {
                     None
                 };
 
-                let diagnostic_msg = if let Some(other_email) = running_email {
-                    format!(
-                        "Account mismatch: Antigravity is currently authenticated as {}, but this account is {}.",
-                        other_email, exp_display
+                let (diagnostic_msg, model_status) = if let Some(other_email) = running_email {
+                    (
+                        format!(
+                            "Account mismatch: Antigravity is currently authenticated as {}, but this account is {}.",
+                            other_email, exp_display
+                        ),
+                        ModelQuotaStatus::AuthRequired,
+                    )
+                } else if e.state == AntigravityRuntimeState::LanguageServerNotFound {
+                    (
+                        "Antigravity is not installed or language_server.exe was not found.".to_string(),
+                        ModelQuotaStatus::Unavailable,
                     )
                 } else {
-                    format!(
-                        "Account mismatch: No running Antigravity instance is currently authenticated as {}.",
-                        exp_display
+                    (
+                        "Antigravity is not currently running. Please launch Antigravity to monitor live quota.".to_string(),
+                        ModelQuotaStatus::Unavailable,
                     )
                 };
 
@@ -113,113 +223,12 @@ impl QuotaProvider for AntigravityQuotaProvider {
                     provider: "Antigravity Local Runtime".to_string(),
                     models: vec![],
                     fetched_at: current_unix_timestamp().to_string(),
-                    status: ModelQuotaStatus::AuthRequired,
+                    status: model_status,
                     data_source: QuotaDataSource::Unavailable,
                     data_quality: QuotaDataQuality::Unavailable,
                     safe_diagnostic_message: Some(diagnostic_msg),
                 };
                 return Ok(status);
-            }
-        };
-
-        match self.client.fetch_quota_from_runtime(&runtime).await {
-            Ok(snap) => {
-                let runtime_email_raw = snap
-                    .account_identity
-                    .clone()
-                    .unwrap_or_else(|| "unknown@antigravity.local".to_string());
-                let runtime_email_norm = runtime_email_raw.trim().to_ascii_lowercase();
-
-                // Strict identity verification
-                let is_match = if is_placeholder && account_id == "default" {
-                    true
-                } else if let Some(ref exp) = normalized_expected {
-                    &runtime_email_norm == exp
-                } else {
-                    true
-                };
-
-                if !is_match {
-                    let exp_display = expected_email.unwrap_or("configured account");
-                    let status = QuotaStatus {
-                        account_id: account_id.to_string(),
-                        email: exp_display.to_string(),
-                        tier: None,
-                        provider: "Antigravity Local Runtime".to_string(),
-                        models: vec![],
-                        fetched_at: current_unix_timestamp().to_string(),
-                        status: ModelQuotaStatus::AuthRequired,
-                        data_source: QuotaDataSource::Unavailable,
-                        data_quality: QuotaDataQuality::Unavailable,
-                        safe_diagnostic_message: Some(format!(
-                            "Account mismatch: Antigravity is currently authenticated as {}, but this account is {}.",
-                            runtime_email_raw, exp_display
-                        )),
-                    };
-                    return Ok(status);
-                }
-
-                let mut models = Vec::new();
-                for m in snap.models {
-                    let fraction = m.remaining_fraction;
-                    let percentage = m
-                        .remaining_percent
-                        .or_else(|| fraction.map(|f| (f * 100.0).round()));
-
-                    let weekly_fraction = m.weekly_remaining_fraction;
-                    let weekly_percentage = m
-                        .weekly_remaining_percent
-                        .or_else(|| weekly_fraction.map(|f| (f * 100.0).round()));
-
-                    models.push(ModelQuota {
-                        model_id: m.model_id.clone(),
-                        display_name: m.display_name.unwrap_or(m.model_id),
-                        remaining_fraction: fraction,
-                        remaining_percentage: percentage,
-                        reset_at: m.reset_time,
-                        status: ModelQuotaStatus::Available,
-                        weekly_remaining_fraction: weekly_fraction,
-                        weekly_remaining_percentage: weekly_percentage,
-                        weekly_reset_at: m.weekly_reset_time,
-                        windows: m.windows,
-                    });
-                }
-
-                let status = QuotaStatus {
-                    account_id: account_id.to_string(),
-                    email: runtime_email_raw,
-                    tier: snap.plan_name.or(snap.tier),
-                    provider: "Antigravity Local Runtime".to_string(),
-                    models,
-                    fetched_at: snap.fetched_at,
-                    status: ModelQuotaStatus::Available,
-                    data_source: QuotaDataSource::RealProvider,
-                    data_quality: QuotaDataQuality::Live,
-                    safe_diagnostic_message: Some(
-                        "Synchronized live quota from running Antigravity Language Server.".to_string(),
-                    ),
-                };
-
-                Ok(status)
-            }
-            Err(e) => {
-                let status = QuotaStatus {
-                    account_id: account_id.to_string(),
-                    email: expected_email.unwrap_or("Antigravity Local").to_string(),
-                    tier: None,
-                    provider: "Antigravity Local Runtime".to_string(),
-                    models: vec![],
-                    fetched_at: current_unix_timestamp().to_string(),
-                    status: if e.state == AntigravityRuntimeState::AntigravityNotRunning {
-                        ModelQuotaStatus::Unavailable
-                    } else {
-                        ModelQuotaStatus::AuthRequired
-                    },
-                    data_source: QuotaDataSource::Unavailable,
-                    data_quality: QuotaDataQuality::Unavailable,
-                    safe_diagnostic_message: Some(e.message),
-                };
-                Ok(status)
             }
         }
     }

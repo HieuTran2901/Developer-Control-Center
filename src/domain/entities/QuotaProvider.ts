@@ -6,6 +6,7 @@ export type ModelQuotaStatus =
   | 'Unsupported'
   | 'AuthRequired'
   | 'ReauthorizationRequired'
+  | 'Forbidden'
   | 'RateLimited'
   | 'NetworkError'
   | 'NotFound';

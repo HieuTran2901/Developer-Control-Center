@@ -35,10 +35,12 @@ export function QuotaAccountCard({
   isRefreshing,
 }: QuotaAccountCardProps) {
   const [relativeSyncTime, setRelativeSyncTime] = useState<string>('');
-  const [, setTick] = useState(0);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [newDisplayName, setNewDisplayName] = useState(snapshot.displayName || '');
+  const [isEditingProjectId, setIsEditingProjectId] = useState(false);
+  const [customProjectId, setCustomProjectId] = useState(snapshot.projectId || '');
+  const [isSavingProjectId, setIsSavingProjectId] = useState(false);
   const [isConfirmingRemove, setIsConfirmingRemove] = useState(false);
   const [connectStage, setConnectStage] = useState<ConnectStage>('idle');
   const [connectStatusMessage, setConnectStatusMessage] = useState<string | null>(null);
@@ -69,7 +71,7 @@ export function QuotaAccountCard({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Update relative timestamps and countdown ticker every second
+  // Update relative timestamps every 10 seconds to save CPU
   useEffect(() => {
     function updateTimestamps() {
       if (snapshot.lastSuccessfulSyncAt) {
@@ -77,13 +79,16 @@ export function QuotaAccountCard({
       } else {
         setRelativeSyncTime('');
       }
-      setTick((t) => (t + 1) % 100000);
     }
 
     updateTimestamps();
-    const interval = setInterval(updateTimestamps, 1000);
+    const interval = setInterval(updateTimestamps, 10000);
     return () => clearInterval(interval);
-  }, [snapshot.lastSuccessfulSyncAt, snapshot.quota]);
+  }, [snapshot.lastSuccessfulSyncAt]);
+
+  useEffect(() => {
+    setCustomProjectId(snapshot.projectId || '');
+  }, [snapshot.projectId]);
 
   const isDefaultAccount = snapshot.accountId === 'default';
   const isDisabled = snapshot.status === 'Disabled';
@@ -105,6 +110,20 @@ export function QuotaAccountCard({
     e.preventDefault();
     await onRename(snapshot.accountId, newDisplayName.trim() || null);
     setIsRenaming(false);
+  };
+
+  const handleSaveProjectId = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setIsSavingProjectId(true);
+    try {
+      await quotaPollingService.setAccountProjectId(snapshot.accountId, customProjectId.trim() || null);
+      await onRefresh(snapshot.accountId);
+      setIsEditingProjectId(false);
+    } catch (err) {
+      console.error('Failed to set GCP project ID:', err);
+    } finally {
+      setIsSavingProjectId(false);
+    }
   };
 
   const handleConnectGoogleOAuth = async () => {
@@ -371,6 +390,17 @@ export function QuotaAccountCard({
                       <span>Rename Account</span>
                     </button>
 
+                    <button
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        setIsEditingProjectId(true);
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-foreground hover:bg-muted/50 flex items-center gap-2"
+                    >
+                      <Icon name="Settings" className="w-3.5 h-3.5 text-muted-foreground" />
+                      <span>Configure GCP Project ID</span>
+                    </button>
+
                     <div className="my-1 border-t border-border" />
 
                     <button
@@ -389,9 +419,39 @@ export function QuotaAccountCard({
             </div>
           </div>
 
-          <div className="text-[11px] text-muted-foreground truncate">
-            {snapshot.tier || 'Standard Tier'} · {snapshot.email}
+          <div className="text-[11px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
+            <span>{snapshot.tier || 'Standard Tier'} · {snapshot.email}</span>
+            {snapshot.projectId && !isEditingProjectId && (
+              <span className="font-mono bg-muted px-1.5 py-0.2 rounded text-[10px] text-foreground/80" title={`Google Cloud Project: ${snapshot.projectId}`}>
+                GCP: {snapshot.projectId}
+              </span>
+            )}
           </div>
+
+          {isEditingProjectId && (
+            <form onSubmit={handleSaveProjectId} className="pt-1.5 flex items-center gap-1.5 animate-in fade-in-50">
+              <input
+                type="text"
+                placeholder="GCP Project ID (e.g. my-project-123)"
+                value={customProjectId}
+                onChange={(e) => setCustomProjectId(e.target.value)}
+                className="flex-1 px-2 py-0.5 text-xs rounded bg-background border border-border text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                autoFocus
+              />
+              <Button type="submit" size="sm" disabled={isSavingProjectId} className="h-6 px-2 text-[11px] bg-primary text-primary-foreground font-medium">
+                {isSavingProjectId ? <Icon name="Loader2" className="w-3 h-3 animate-spin" /> : 'Save'}
+              </Button>
+              <Button
+                type="button"
+                onClick={() => setIsEditingProjectId(false)}
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0"
+              >
+                <Icon name="X" className="w-3 h-3 text-muted-foreground" />
+              </Button>
+            </form>
+          )}
         </CardHeader>
 
         {/* Card Content */}
@@ -404,8 +464,8 @@ export function QuotaAccountCard({
             </div>
           )}
 
-          {/* Identity Mismatch / Reauthorization / Offline Banner */}
-          {(snapshot.status === 'AuthRequired' || snapshot.status === 'ReauthorizationRequired' || !snapshot.quota) && (
+          {/* Identity Mismatch / Reauthorization / Forbidden / Offline Banner */}
+          {(snapshot.status === 'AuthRequired' || snapshot.status === 'ReauthorizationRequired' || snapshot.status === 'Forbidden' || !snapshot.quota) && (
             <div>
               {isMismatch ? (
                 <div className="p-3.5 rounded-xl bg-muted/25 border border-border/70 text-xs space-y-2.5 font-sans">
@@ -427,6 +487,59 @@ export function QuotaAccountCard({
                       </span>
                       .
                     </p>
+                  </div>
+                </div>
+              ) : snapshot.status === 'Forbidden' ? (
+                <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/25 text-xs space-y-2.5 font-sans">
+                  <div className="flex items-center gap-1.5 font-semibold text-rose-400 text-xs">
+                    <Icon name="ShieldAlert" className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                    <span>Google Cloud API Access Denied (HTTP 403)</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-normal">
+                    {snapshot.errorMessage ||
+                      'Your Google account is authenticated, but Google Cloud returned 403 Forbidden. Attach your Google Cloud Project ID below to authorize quota requests.'}
+                  </p>
+
+                  <div className="p-2.5 rounded-lg bg-surface/80 border border-border/80 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-semibold text-foreground">GCP Project ID</span>
+                      <span className="text-[10px] text-muted-foreground">e.g. your-project-id-12345</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        placeholder="Enter Google Cloud Project ID..."
+                        value={customProjectId}
+                        onChange={(e) => setCustomProjectId(e.target.value)}
+                        className="flex-1 px-2.5 py-1 text-xs rounded-md bg-background border border-border text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                      />
+                      <Button
+                        size="sm"
+                        onClick={() => handleSaveProjectId()}
+                        disabled={isSavingProjectId || isRefreshing}
+                        className="h-7 text-[11px] px-3 bg-primary hover:bg-primary/90 text-primary-foreground font-medium gap-1 shrink-0"
+                      >
+                        {isSavingProjectId ? (
+                          <Icon name="Loader2" className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Icon name="Check" className="w-3 h-3" />
+                        )}
+                        <span>Save & Sync</span>
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="pt-0.5 flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onRefresh(snapshot.accountId)}
+                      disabled={isRefreshing}
+                      className="h-6 text-[11px] px-2.5 bg-surface hover:bg-muted font-medium gap-1 text-foreground"
+                    >
+                      <Icon name="RefreshCw" className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
+                      <span>Retry Quota Sync</span>
+                    </Button>
                   </div>
                 </div>
               ) : snapshot.status === 'ReauthorizationRequired' || (isGooglePrimary && snapshot.errorMessage?.toLowerCase().includes('reauthorization')) ? (
@@ -882,6 +995,13 @@ function StatusBadge({
         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30 shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
           Reauthorization Required
+        </span>
+      );
+    case 'Forbidden':
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/15 text-rose-400 border border-rose-500/30 shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+          API Access Denied (403)
         </span>
       );
     case 'AuthRequired':

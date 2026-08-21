@@ -84,6 +84,7 @@ export function AccountQuotaTable({
   const getSubBadge = (s: AccountQuotaSnapshot) => {
     const isMismatch = s.errorMessage?.includes('Account mismatch') || (s.status === 'AuthRequired' && s.errorMessage?.toLowerCase().includes('mismatch'));
     const isAuthReq = (s.status === 'AuthRequired' && !isMismatch) || s.status === 'ReauthorizationRequired';
+    const isForbidden = s.status === 'Forbidden';
     const isStale = s.dataQuality === 'Stale';
     const isDisabled = s.status === 'Disabled';
     const isChecking = s.status === 'Checking';
@@ -97,6 +98,9 @@ export function AccountQuotaTable({
     }
     if (isAuthReq) {
       return { label: 'Auth Required', color: 'bg-destructive/15 text-destructive border-destructive/25' };
+    }
+    if (isForbidden) {
+      return { label: 'API Access Denied', color: 'bg-rose-500/15 text-rose-400 border-rose-500/25' };
     }
     if (isStale) {
       return { label: 'Stale', color: 'bg-purple-500/15 text-purple-400 border-purple-500/25' };
@@ -125,6 +129,7 @@ export function AccountQuotaTable({
   const getStatusPresentation = (s: AccountQuotaSnapshot, rankInfo?: RankedAccount) => {
     const isMismatch = s.errorMessage?.includes('Account mismatch') || (s.status === 'AuthRequired' && s.errorMessage?.toLowerCase().includes('mismatch'));
     const isAuthReq = (s.status === 'AuthRequired' && !isMismatch) || s.status === 'ReauthorizationRequired';
+    const isForbidden = s.status === 'Forbidden';
     const isStale = s.dataQuality === 'Stale';
     const isDisabled = s.status === 'Disabled';
     const isChecking = s.status === 'Checking';
@@ -147,6 +152,14 @@ export function AccountQuotaTable({
         textColor: 'text-destructive',
         label: 'Auth Required',
         sublabel: 'Reauthentication needed',
+      };
+    }
+    if (isForbidden) {
+      return {
+        dotColor: 'bg-rose-400',
+        textColor: 'text-rose-400',
+        label: 'API Forbidden',
+        sublabel: 'Google Cloud 403 Forbidden',
       };
     }
     if (isStale) {
@@ -351,8 +364,13 @@ export function AccountQuotaTable({
                         <div className="text-[11px] text-muted-foreground truncate font-mono max-w-[180px]" title={s.email}>
                           {s.email}
                         </div>
-                        <div className="text-[10px] text-muted-foreground/80">
-                          {s.tier || 'Standard Tier'}
+                        <div className="text-[10px] text-muted-foreground/80 flex items-center gap-1.5 flex-wrap">
+                          <span>{s.tier || 'Standard Tier'}</span>
+                          {s.projectId && (
+                            <span className="font-mono bg-muted/50 px-1 py-0.2 rounded text-[9px] text-foreground/70" title={`Google Cloud Project: ${s.projectId}`}>
+                              proj: {s.projectId}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>

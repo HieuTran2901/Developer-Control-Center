@@ -29,6 +29,7 @@ pub enum AccountPollingState {
     Online,
     AuthRequired,
     ReauthorizationRequired,
+    Forbidden,
     RateLimited,
     NetworkError,
     ProviderError,
@@ -43,6 +44,8 @@ pub struct AccountMonitorConfig {
     pub account_id: String,
     #[serde(default)]
     pub provider: Option<QuotaProviderId>,
+    #[serde(default)]
+    pub project_id: Option<String>,
     pub email: String,
     pub display_name: Option<String>,
     pub tier: Option<String>,
@@ -86,6 +89,8 @@ impl AccountMonitorConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaSnapshot {
     pub account_id: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
     pub provider: QuotaProviderId,
     pub email: String,
     pub display_name: Option<String>,
@@ -221,6 +226,7 @@ impl AccountRegistry {
             let default_account = AccountMonitorConfig {
                 account_id: "default".to_string(),
                 provider: Some(QuotaProviderId::Antigravity),
+                project_id: None,
                 email: "default@antigravity.oauth".to_string(),
                 display_name: Some("Primary Antigravity Account".to_string()),
                 tier: Some("Standard Tier".to_string()),
@@ -331,6 +337,18 @@ impl AccountRegistry {
         let mut map = self.accounts.write().await;
         if let Some(acc) = map.get_mut(account_id) {
             acc.display_name = display_name;
+            acc.updated_at = current_timestamp_str();
+            self.save_internal(&map);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn set_project_id(&self, account_id: &str, project_id: Option<String>) -> Result<bool, String> {
+        let mut map = self.accounts.write().await;
+        if let Some(acc) = map.get_mut(account_id) {
+            acc.project_id = project_id;
             acc.updated_at = current_timestamp_str();
             self.save_internal(&map);
             Ok(true)
@@ -711,6 +729,7 @@ impl QuotaPollingEngine {
             } else {
                 results.push(AccountQuotaSnapshot {
                     account_id: acc.account_id.clone(),
+                    project_id: acc.project_id.clone(),
                     provider: acc.provider(),
                     email: acc.email.clone(),
                     display_name: acc.display_name.clone(),
@@ -788,7 +807,8 @@ impl QuotaPollingEngine {
                 AccountPollingState::AuthRequired => auth_req += 1,
                 AccountPollingState::NetworkError
                 | AccountPollingState::RateLimited
-                | AccountPollingState::ProviderError => errors += 1,
+                | AccountPollingState::ProviderError
+                | AccountPollingState::Forbidden => errors += 1,
                 _ => {}
             }
         }
@@ -843,6 +863,21 @@ impl QuotaPollingEngine {
         let res = self.registry.rename(account_id, display_name.clone()).await?;
         if let Some(snap) = self.snapshots.write().await.get_mut(account_id) {
             snap.display_name = display_name;
+        }
+        Ok(res)
+    }
+
+    pub async fn set_account_project_id(&self, account_id: &str, project_id: Option<String>) -> Result<bool, String> {
+        let clean_proj = project_id.and_then(|p| {
+            let t = p.trim().to_string();
+            if t.is_empty() { None } else { Some(t) }
+        });
+        let res = self.registry.set_project_id(account_id, clean_proj.clone()).await?;
+        if let Some(snap) = self.snapshots.write().await.get_mut(account_id) {
+            snap.project_id = clean_proj;
+        }
+        if res {
+            let _ = self.refresh_account_now(account_id).await;
         }
         Ok(res)
     }
@@ -904,6 +939,7 @@ impl QuotaPollingEngine {
             provider_id,
             &acc.account_id,
             Some(&acc.email),
+            acc.project_id.as_deref(),
             true, // force_refresh
         );
 
@@ -949,6 +985,14 @@ impl QuotaPollingEngine {
                         None,
                         quota.safe_diagnostic_message.clone(),
                     ),
+                    ModelQuotaStatus::Forbidden => (
+                        AccountPollingState::Forbidden,
+                        crate::monitor::quota_provider::QuotaDataSource::Unavailable,
+                        crate::monitor::quota_provider::QuotaDataQuality::Unavailable,
+                        None,
+                        None,
+                        quota.safe_diagnostic_message.clone(),
+                    ),
                     ModelQuotaStatus::RateLimited => (
                         AccountPollingState::RateLimited,
                         quota.data_source.clone(),
@@ -978,6 +1022,7 @@ impl QuotaPollingEngine {
 
                 AccountQuotaSnapshot {
                     account_id: acc.account_id.clone(),
+                    project_id: acc.project_id.clone(),
                     provider: provider_id,
                     email: acc.email.clone(),
                     display_name: acc.display_name.clone(),
@@ -997,9 +1042,14 @@ impl QuotaPollingEngine {
             Ok(Err(err)) => {
                 let (status, msg) = match err.kind {
                     QuotaProviderErrorKind::CredentialUnavailable
-                    | QuotaProviderErrorKind::Unauthorized
-                    | QuotaProviderErrorKind::Forbidden => {
+                    | QuotaProviderErrorKind::Unauthorized => {
                         (AccountPollingState::AuthRequired, err.message)
+                    }
+                    QuotaProviderErrorKind::ReauthorizationRequired => {
+                        (AccountPollingState::ReauthorizationRequired, err.message)
+                    }
+                    QuotaProviderErrorKind::Forbidden => {
+                        (AccountPollingState::Forbidden, err.message)
                     }
                     QuotaProviderErrorKind::RateLimited => {
                         (AccountPollingState::RateLimited, err.message)
@@ -1010,18 +1060,76 @@ impl QuotaPollingEngine {
                     _ => (AccountPollingState::ProviderError, err.message),
                 };
 
-                // Preserve stale quota snapshot if network error
-                let stale_quota = existing.as_ref().and_then(|e| e.quota.clone());
-                let stale_sync = existing.as_ref().and_then(|e| e.last_successful_sync_at.clone());
-                let data_source = existing.as_ref().map(|e| e.data_source.clone()).unwrap_or(crate::monitor::quota_provider::QuotaDataSource::Unavailable);
+                // Preserve stale quota snapshot ONLY if temporary network error or rate limit on a previously online account
+                let is_temporary_error = status == AccountPollingState::NetworkError || status == AccountPollingState::RateLimited;
+                let stale_quota = if is_temporary_error {
+                    existing.as_ref().and_then(|e| e.quota.clone())
+                } else {
+                    None
+                };
+                let stale_sync = if is_temporary_error {
+                    existing.as_ref().and_then(|e| e.last_successful_sync_at.clone())
+                } else {
+                    None
+                };
+                let data_source = if is_temporary_error {
+                    existing.as_ref().map(|e| e.data_source.clone()).unwrap_or(crate::monitor::quota_provider::QuotaDataSource::Unavailable)
+                } else {
+                    crate::monitor::quota_provider::QuotaDataSource::Unavailable
+                };
                 let data_quality = if stale_quota.is_some() {
                     crate::monitor::quota_provider::QuotaDataQuality::Stale
                 } else {
                     crate::monitor::quota_provider::QuotaDataQuality::Unavailable
                 };
 
+                let (final_status, final_error) = if is_temporary_error && stale_quota.is_some() {
+                    (AccountPollingState::Online, Some(format!("Using cached quota ({})", sanitize_error_message(&msg))))
+                } else {
+                    (status, Some(sanitize_error_message(&msg)))
+                };
+
+
                 AccountQuotaSnapshot {
                     account_id: acc.account_id.clone(),
+                    project_id: acc.project_id.clone(),
+                    provider: provider_id,
+                    email: acc.email.clone(),
+                    display_name: acc.display_name.clone(),
+                    tier: acc.tier.clone(),
+                    status: final_status,
+                    auto_connect: acc.auto_connect,
+                    data_source,
+                    data_quality,
+                    last_updated_at: now_str,
+                    last_successful_sync_at: stale_sync,
+                    next_refresh_at: Some(next_str),
+                    quota: stale_quota,
+                    error_message: final_error,
+                }
+            }
+            Err(_) => {
+                // Request timeout
+                let stale_quota = existing.as_ref().and_then(|e| e.quota.clone());
+                let stale_sync = existing.as_ref().and_then(|e| e.last_successful_sync_at.clone());
+                let data_source = existing.as_ref().map(|e| e.data_source.clone()).unwrap_or(crate::monitor::quota_provider::QuotaDataSource::Unavailable);
+                let (data_quality, status, error_msg) = if stale_quota.is_some() {
+                    (
+                        crate::monitor::quota_provider::QuotaDataQuality::Stale,
+                        AccountPollingState::Online,
+                        Some("Using cached quota (Standby / Antigravity active on another account)".to_string()),
+                    )
+                } else {
+                    (
+                        crate::monitor::quota_provider::QuotaDataQuality::Unavailable,
+                        AccountPollingState::NetworkError,
+                        Some("Quota request timed out after 8s.".to_string()),
+                    )
+                };
+
+                AccountQuotaSnapshot {
+                    account_id: acc.account_id.clone(),
+                    project_id: acc.project_id.clone(),
                     provider: provider_id,
                     email: acc.email.clone(),
                     display_name: acc.display_name.clone(),
@@ -1034,35 +1142,7 @@ impl QuotaPollingEngine {
                     last_successful_sync_at: stale_sync,
                     next_refresh_at: Some(next_str),
                     quota: stale_quota,
-                    error_message: Some(sanitize_error_message(&msg)),
-                }
-            }
-            Err(_) => {
-                // Request timeout
-                let stale_quota = existing.as_ref().and_then(|e| e.quota.clone());
-                let stale_sync = existing.as_ref().and_then(|e| e.last_successful_sync_at.clone());
-                let data_source = existing.as_ref().map(|e| e.data_source.clone()).unwrap_or(crate::monitor::quota_provider::QuotaDataSource::Unavailable);
-                let data_quality = if stale_quota.is_some() {
-                    crate::monitor::quota_provider::QuotaDataQuality::Stale
-                } else {
-                    crate::monitor::quota_provider::QuotaDataQuality::Unavailable
-                };
-
-                AccountQuotaSnapshot {
-                    account_id: acc.account_id.clone(),
-                    provider: provider_id,
-                    email: acc.email.clone(),
-                    display_name: acc.display_name.clone(),
-                    tier: acc.tier.clone(),
-                    status: AccountPollingState::NetworkError,
-                    auto_connect: acc.auto_connect,
-                    data_source,
-                    data_quality,
-                    last_updated_at: now_str,
-                    last_successful_sync_at: stale_sync,
-                    next_refresh_at: Some(next_str),
-                    quota: stale_quota,
-                    error_message: Some("Quota request timed out after 8s.".to_string()),
+                    error_message: error_msg,
                 }
             }
         };
@@ -1409,6 +1489,7 @@ mod tests {
         let config = AccountMonitorConfig {
             account_id: "new-user-abc".to_string(),
             provider: Some(QuotaProviderId::Antigravity),
+            project_id: None,
             email: "abc@example.com".to_string(),
             display_name: Some("New User ABC".to_string()),
             tier: Some("Pro".to_string()),
@@ -1442,6 +1523,7 @@ mod tests {
         let acc_a = AccountMonitorConfig {
             account_id: "acc-a".to_string(),
             provider: Some(QuotaProviderId::Antigravity),
+            project_id: None,
             email: "a@example.com".to_string(),
             display_name: Some("Account A".to_string()),
             tier: None,
@@ -1455,6 +1537,7 @@ mod tests {
         let acc_b = AccountMonitorConfig {
             account_id: "acc-b".to_string(),
             provider: Some(QuotaProviderId::Antigravity),
+            project_id: None,
             email: "b@example.com".to_string(),
             display_name: Some("Account B".to_string()),
             tier: None,
@@ -1502,6 +1585,7 @@ mod tests {
                 "acc-test".to_string(),
                 AccountQuotaSnapshot {
                     account_id: "acc-test".to_string(),
+                    project_id: None,
                     provider: QuotaProviderId::Antigravity,
                     email: "test@example.com".to_string(),
                     display_name: None,
@@ -1552,6 +1636,7 @@ mod tests {
             let acc = AccountMonitorConfig {
                 account_id: format!("acc-{}", i),
                 provider: Some(QuotaProviderId::Antigravity),
+                project_id: None,
                 email: format!("user{}@example.com", i),
                 display_name: Some(format!("Account {}", i)),
                 tier: None,
@@ -1601,6 +1686,7 @@ mod tests {
         let acc_b = AccountMonitorConfig {
             account_id: "acc-b".to_string(),
             provider: Some(QuotaProviderId::Antigravity),
+            project_id: None,
             email: "b@example.com".to_string(),
             display_name: Some("Account B".to_string()),
             tier: None,
@@ -1614,6 +1700,7 @@ mod tests {
         let acc_a = AccountMonitorConfig {
             account_id: "acc-a".to_string(),
             provider: Some(QuotaProviderId::Antigravity),
+            project_id: None,
             email: "a@example.com".to_string(),
             display_name: Some("Account A".to_string()),
             tier: None,
@@ -1644,6 +1731,7 @@ mod tests {
         let acc_2 = AccountMonitorConfig {
             account_id: "acc-2".to_string(),
             provider: Some(QuotaProviderId::Antigravity),
+            project_id: None,
             email: "user2@example.com".to_string(),
             display_name: Some("User 2".to_string()),
             tier: None,
@@ -1657,6 +1745,7 @@ mod tests {
         let acc_1 = AccountMonitorConfig {
             account_id: "acc-1".to_string(),
             provider: Some(QuotaProviderId::Antigravity),
+            project_id: None,
             email: "user1@example.com".to_string(),
             display_name: Some("User 1".to_string()),
             tier: None,
@@ -1689,6 +1778,7 @@ mod tests {
         let acc_z = AccountMonitorConfig {
             account_id: "acc-z".to_string(),
             provider: Some(QuotaProviderId::Antigravity),
+            project_id: None,
             email: "z@example.com".to_string(),
             display_name: Some("Account Z".to_string()),
             tier: None,
@@ -1702,6 +1792,7 @@ mod tests {
         let acc_a = AccountMonitorConfig {
             account_id: "acc-a".to_string(),
             provider: Some(QuotaProviderId::Antigravity),
+            project_id: None,
             email: "a@example.com".to_string(),
             display_name: Some("Account A".to_string()),
             tier: None,
@@ -1723,6 +1814,122 @@ mod tests {
         assert!(pos_a < pos_z, "Serialized json must store accounts sorted deterministically");
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_error_classification_mapping() {
+        // Test 1: CredentialUnavailable -> AuthRequired
+        let err1 = QuotaProviderError {
+            kind: QuotaProviderErrorKind::CredentialUnavailable,
+            message: "No credential found".to_string(),
+        };
+        let status1 = match err1.kind {
+            QuotaProviderErrorKind::CredentialUnavailable
+            | QuotaProviderErrorKind::Unauthorized => AccountPollingState::AuthRequired,
+            QuotaProviderErrorKind::ReauthorizationRequired => AccountPollingState::ReauthorizationRequired,
+            QuotaProviderErrorKind::Forbidden => AccountPollingState::Forbidden,
+            QuotaProviderErrorKind::RateLimited => AccountPollingState::RateLimited,
+            QuotaProviderErrorKind::NetworkError => AccountPollingState::NetworkError,
+            _ => AccountPollingState::ProviderError,
+        };
+        assert_eq!(status1, AccountPollingState::AuthRequired);
+
+        // Test 2: Unauthorized (HTTP 401) -> AuthRequired
+        let err2 = QuotaProviderError {
+            kind: QuotaProviderErrorKind::Unauthorized,
+            message: "HTTP 401 Unauthorized".to_string(),
+        };
+        let status2 = match err2.kind {
+            QuotaProviderErrorKind::CredentialUnavailable
+            | QuotaProviderErrorKind::Unauthorized => AccountPollingState::AuthRequired,
+            QuotaProviderErrorKind::ReauthorizationRequired => AccountPollingState::ReauthorizationRequired,
+            QuotaProviderErrorKind::Forbidden => AccountPollingState::Forbidden,
+            QuotaProviderErrorKind::RateLimited => AccountPollingState::RateLimited,
+            QuotaProviderErrorKind::NetworkError => AccountPollingState::NetworkError,
+            _ => AccountPollingState::ProviderError,
+        };
+        assert_eq!(status2, AccountPollingState::AuthRequired);
+
+        // Test 3: Forbidden (HTTP 403) -> Forbidden (NOT AuthRequired!)
+        let err3 = QuotaProviderError {
+            kind: QuotaProviderErrorKind::Forbidden,
+            message: "HTTP 403 Forbidden PERMISSION_DENIED".to_string(),
+        };
+        let status3 = match err3.kind {
+            QuotaProviderErrorKind::CredentialUnavailable
+            | QuotaProviderErrorKind::Unauthorized => AccountPollingState::AuthRequired,
+            QuotaProviderErrorKind::ReauthorizationRequired => AccountPollingState::ReauthorizationRequired,
+            QuotaProviderErrorKind::Forbidden => AccountPollingState::Forbidden,
+            QuotaProviderErrorKind::RateLimited => AccountPollingState::RateLimited,
+            QuotaProviderErrorKind::NetworkError => AccountPollingState::NetworkError,
+            _ => AccountPollingState::ProviderError,
+        };
+        assert_eq!(status3, AccountPollingState::Forbidden);
+        assert_ne!(status3, AccountPollingState::AuthRequired);
+
+        // Test 4: RateLimited (HTTP 429) -> RateLimited
+        let err4 = QuotaProviderError {
+            kind: QuotaProviderErrorKind::RateLimited,
+            message: "HTTP 429 Too Many Requests".to_string(),
+        };
+        let status4 = match err4.kind {
+            QuotaProviderErrorKind::CredentialUnavailable
+            | QuotaProviderErrorKind::Unauthorized => AccountPollingState::AuthRequired,
+            QuotaProviderErrorKind::ReauthorizationRequired => AccountPollingState::ReauthorizationRequired,
+            QuotaProviderErrorKind::Forbidden => AccountPollingState::Forbidden,
+            QuotaProviderErrorKind::RateLimited => AccountPollingState::RateLimited,
+            QuotaProviderErrorKind::NetworkError => AccountPollingState::NetworkError,
+            _ => AccountPollingState::ProviderError,
+        };
+        assert_eq!(status4, AccountPollingState::RateLimited);
+
+        // Test 5: NetworkError / Timeout -> NetworkError
+        let err5 = QuotaProviderError {
+            kind: QuotaProviderErrorKind::NetworkError,
+            message: "Connection timed out".to_string(),
+        };
+        let status5 = match err5.kind {
+            QuotaProviderErrorKind::CredentialUnavailable
+            | QuotaProviderErrorKind::Unauthorized => AccountPollingState::AuthRequired,
+            QuotaProviderErrorKind::ReauthorizationRequired => AccountPollingState::ReauthorizationRequired,
+            QuotaProviderErrorKind::Forbidden => AccountPollingState::Forbidden,
+            QuotaProviderErrorKind::RateLimited => AccountPollingState::RateLimited,
+            QuotaProviderErrorKind::NetworkError => AccountPollingState::NetworkError,
+            _ => AccountPollingState::ProviderError,
+        };
+        assert_eq!(status5, AccountPollingState::NetworkError);
+
+        // Test 6: ProviderNotImplemented / 5xx / Other -> ProviderError
+        let err6 = QuotaProviderError {
+            kind: QuotaProviderErrorKind::ProviderNotImplemented,
+            message: "Provider not implemented".to_string(),
+        };
+        let status6 = match err6.kind {
+            QuotaProviderErrorKind::CredentialUnavailable
+            | QuotaProviderErrorKind::Unauthorized => AccountPollingState::AuthRequired,
+            QuotaProviderErrorKind::ReauthorizationRequired => AccountPollingState::ReauthorizationRequired,
+            QuotaProviderErrorKind::Forbidden => AccountPollingState::Forbidden,
+            QuotaProviderErrorKind::RateLimited => AccountPollingState::RateLimited,
+            QuotaProviderErrorKind::NetworkError => AccountPollingState::NetworkError,
+            _ => AccountPollingState::ProviderError,
+        };
+        assert_eq!(status6, AccountPollingState::ProviderError);
+
+        // Test 7: ReauthorizationRequired -> ReauthorizationRequired
+        let err7 = QuotaProviderError {
+            kind: QuotaProviderErrorKind::ReauthorizationRequired,
+            message: "invalid_grant".to_string(),
+        };
+        let status7 = match err7.kind {
+            QuotaProviderErrorKind::CredentialUnavailable
+            | QuotaProviderErrorKind::Unauthorized => AccountPollingState::AuthRequired,
+            QuotaProviderErrorKind::ReauthorizationRequired => AccountPollingState::ReauthorizationRequired,
+            QuotaProviderErrorKind::Forbidden => AccountPollingState::Forbidden,
+            QuotaProviderErrorKind::RateLimited => AccountPollingState::RateLimited,
+            QuotaProviderErrorKind::NetworkError => AccountPollingState::NetworkError,
+            _ => AccountPollingState::ProviderError,
+        };
+        assert_eq!(status7, AccountPollingState::ReauthorizationRequired);
     }
 }
 

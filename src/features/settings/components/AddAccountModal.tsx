@@ -17,6 +17,7 @@ export function AddAccountModal({ isOpen, onClose, onAddAccount, onAccountAdded 
   const [provider, setProvider] = useState<QuotaProviderId>('google_cloud_code');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [tier, setTier] = useState('Standard Tier');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
@@ -72,6 +73,7 @@ export function AddAccountModal({ isOpen, onClose, onAddAccount, onAccountAdded 
       const config: AccountMonitorConfig = {
         accountId,
         provider,
+        projectId: projectId.trim() || null,
         email: cleanEmail,
         displayName: displayName.trim() || cleanEmail,
         tier: tier.trim() || null,
@@ -85,6 +87,7 @@ export function AddAccountModal({ isOpen, onClose, onAddAccount, onAccountAdded 
       await onAddAccount(config);
       setDisplayName('');
       setEmail('');
+      setProjectId('');
       onClose();
     } catch (err: any) {
       setError(err?.message || String(err) || 'Failed to register account.');
@@ -215,6 +218,20 @@ export function AddAccountModal({ isOpen, onClose, onAddAccount, onAccountAdded 
                   onChange={(e) => setEmail(e.target.value)}
                   required
                   className="w-full px-3 py-2 rounded-lg bg-background border border-border text-foreground text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="font-semibold text-foreground">Google Cloud Project ID (Optional)</label>
+                  <span className="text-[10px] text-muted-foreground">For Direct Cloud API</span>
+                </div>
+                <input
+                  type="text"
+                  placeholder="e.g. antigravity-quota-monitor-12345"
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-foreground text-xs focus:outline-none focus:ring-1 focus:ring-primary font-mono text-[11px]"
                 />
               </div>
 

@@ -58,7 +58,12 @@ export function PipelineGenerator() {
     setError('');
     
     try {
-      const result = await invoke<any>('scan_project_cmd', { projectRootPath: path });
+      const scanPromise = invoke<any>('scan_project_cmd', { projectRootPath: path });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Project scan timed out after 5 seconds')), 5000)
+      );
+
+      const result = await Promise.race([scanPromise, timeoutPromise]);
       if (scanGenerationRef.current === generation) {
         setIntelligence(result);
         setScanState('complete');
@@ -66,7 +71,7 @@ export function PipelineGenerator() {
     } catch (err: any) {
       console.error('Failed to scan project:', err);
       if (scanGenerationRef.current === generation) {
-        setError(err.toString());
+        setError(err.message || err.toString());
         setScanState('error');
       }
     }
@@ -269,10 +274,24 @@ export function PipelineGenerator() {
 
           {/* Project Intelligence Section */}
           <div className="space-y-4">
-            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider flex items-center gap-2">
-              <Icon name="Cpu" size={16} className="text-muted-foreground" />
-              Project Intelligence
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider flex items-center gap-2">
+                <Icon name="Cpu" size={16} className="text-muted-foreground" />
+                Project Intelligence
+              </h3>
+              {activePath && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => activePath && scanProject(activePath)}
+                  disabled={scanState === 'scanning'}
+                  className="h-7 text-xs font-mono text-muted-foreground hover:text-foreground"
+                >
+                  <Icon name="RefreshCw" size={13} className={`mr-1 ${scanState === 'scanning' ? 'animate-spin' : ''}`} />
+                  Re-scan
+                </Button>
+              )}
+            </div>
             
             <div className="border border-border/40 rounded-lg p-5 bg-card/40 flex flex-col justify-center min-h-[140px] max-h-[300px] overflow-y-auto">
               {scanState === 'idle' && (
@@ -291,9 +310,15 @@ export function PipelineGenerator() {
               )}
 
               {scanState === 'error' && (
-                <div className="text-center text-sm text-red-500 flex flex-col items-center gap-2">
+                <div className="text-center text-sm text-red-500 flex flex-col items-center gap-3">
                   <Icon name="AlertTriangle" size={24} />
                   <span>Failed to scan project: {error}</span>
+                  {activePath && (
+                    <Button size="sm" variant="outline" onClick={() => scanProject(activePath)} className="text-xs font-mono">
+                      <Icon name="RefreshCw" size={12} className="mr-1.5" />
+                      Try Scanning Again
+                    </Button>
+                  )}
                 </div>
               )}
 

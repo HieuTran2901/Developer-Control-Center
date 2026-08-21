@@ -44,8 +44,11 @@ export class QuotaPollingService {
   }
 
   public async renameAccount(accountId: string, displayName: string | null): Promise<boolean> {
-
     return await invoke<boolean>('quota_rename_account_cmd', { accountId, displayName });
+  }
+
+  public async setAccountProjectId(accountId: string, projectId: string | null): Promise<boolean> {
+    return await invoke<boolean>('quota_set_account_project_id_cmd', { accountId, projectId });
   }
 
   public async getAccountState(accountId: string): Promise<AccountQuotaSnapshot | null> {

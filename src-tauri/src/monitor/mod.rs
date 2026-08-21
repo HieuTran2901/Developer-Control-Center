@@ -6,6 +6,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::RwLock;
 
 pub mod antigravity_discovery;
+pub mod antigravity_headless_worker;
 pub mod antigravity_quota;
 pub mod providers;
 pub mod quota_discovery;
@@ -128,6 +129,7 @@ pub async fn get_antigravity_account_quota_cmd(
             provider_id,
             &id,
             expected_email.as_deref(),
+            None,
             force_refresh.unwrap_or(false),
         )
         .await
@@ -191,6 +193,15 @@ pub async fn quota_rename_account_cmd(
     state: State<'_, MonitorState>,
 ) -> Result<bool, String> {
     state.polling_engine.rename_account(&account_id, display_name).await
+}
+
+#[tauri::command]
+pub async fn quota_set_account_project_id_cmd(
+    account_id: String,
+    project_id: Option<String>,
+    state: State<'_, MonitorState>,
+) -> Result<bool, String> {
+    state.polling_engine.set_account_project_id(&account_id, project_id).await
 }
 
 #[tauri::command]

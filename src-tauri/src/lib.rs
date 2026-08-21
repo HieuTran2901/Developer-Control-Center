@@ -172,6 +172,7 @@ pub fn run() {
             monitor::quota_set_account_auto_connect_cmd,
             monitor::quota_reconnect_startup_accounts_cmd,
             monitor::quota_rename_account_cmd,
+            monitor::quota_set_account_project_id_cmd,
 
             monitor::quota_get_account_state_cmd,
             monitor::quota_get_all_states_cmd,

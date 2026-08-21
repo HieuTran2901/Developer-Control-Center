@@ -201,7 +201,11 @@ pub async fn analyze_folder_scope_cmd(
     folder_path: String,
 ) -> Result<crate::pipeline::scope::FolderScopeAnalysis, String> {
     let path = std::path::PathBuf::from(&folder_path);
-    let analysis = crate::pipeline::scope::FolderSafetyGuard::analyze_scope(&path);
+    let analysis = tokio::task::spawn_blocking(move || {
+        crate::pipeline::scope::FolderSafetyGuard::analyze_scope(&path)
+    })
+    .await
+    .map_err(|e| format!("Scope analysis failed: {}", e))?;
     Ok(analysis)
 }
 
@@ -214,7 +218,11 @@ pub async fn scan_project_cmd(
         return Err(format!("Invalid project root: {}", project_root_path));
     }
     
-    let intelligence = crate::pipeline::discovery::ProjectScanner::scan(&root);
+    let intelligence = tokio::task::spawn_blocking(move || {
+        crate::pipeline::discovery::ProjectScanner::scan(&root)
+    })
+    .await
+    .map_err(|e| format!("Project scan failed: {}", e))?;
     Ok(intelligence)
 }
 

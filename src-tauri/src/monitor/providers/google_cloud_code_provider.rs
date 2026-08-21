@@ -130,10 +130,11 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
         &self,
         account_id: &str,
         expected_email: Option<&str>,
+        project_id: Option<&str>,
     ) -> Result<QuotaStatus, QuotaProviderError> {
         eprintln!(
-            "[CLOUD-DIRECT] QUOTA REQUEST START: account_id={}, email={:?}, provider=google_cloud_code, method=POST, timestamp={}",
-            account_id, expected_email, current_unix_timestamp()
+            "[CLOUD-DIRECT] QUOTA REQUEST START: account_id={}, email={:?}, project_id={:?}, provider=google_cloud_code, method=POST, timestamp={}",
+            account_id, expected_email, project_id, current_unix_timestamp()
         );
 
         // 1. Retrieve refresh token from OS secure credential storage
@@ -228,22 +229,33 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
         let mut load_resp_opt = None;
         let mut selected_base_url = base_urls[0];
 
+        let mut load_json = serde_json::json!({
+            "metadata": {
+                "ideType": "ANTIGRAVITY",
+                "ideVersion": "2.8.1",
+                "pluginType": "GEMINI",
+                "subclientType": "HUB"
+            }
+        });
+        if let Some(p) = project_id.filter(|p| !p.trim().is_empty()) {
+            load_json["cloudaicompanionProject"] = serde_json::json!(p.trim());
+            load_json["project"] = serde_json::json!(p.trim());
+        }
+
         for base_url in base_urls {
             let load_url = format!("{}/v1internal:loadCodeAssist", base_url);
-            let req = self
+            let mut req = self
                 .http_client
                 .post(&load_url)
                 .header("Authorization", format!("Bearer {}", access_token))
                 .header("Content-Type", "application/json")
-                .header("User-Agent", "antigravity/2.8.1")
-                .json(&serde_json::json!({
-                    "metadata": {
-                        "ideType": "ANTIGRAVITY",
-                        "ideVersion": "2.8.1",
-                        "pluginType": "GEMINI",
-                        "subclientType": "HUB"
-                    }
-                }));
+                .header("User-Agent", "antigravity/2.8.1");
+
+            if let Some(p) = project_id.filter(|p| !p.trim().is_empty()) {
+                req = req.header("X-Goog-User-Project", p.trim());
+            }
+
+            let req = req.json(&load_json);
 
             if let Ok(resp) = req.send().await {
                 if resp.status().is_success() || resp.status().as_u16() == 400 || resp.status().as_u16() == 404 || resp.status().as_u16() == 401 || resp.status().as_u16() == 403 {
@@ -276,17 +288,19 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
             eprintln!("[CLOUD-DIRECT] AUTH HTTP 403: account_id={}, stage=loadCodeAssist, classification=Forbidden", account_id);
             return Err(QuotaProviderError {
                 kind: QuotaProviderErrorKind::Forbidden,
-                message: "Cloud Code API access forbidden. Account may lack required permissions.".to_string(),
+                message: "Cloud Code API access forbidden. Account may lack required permissions or GCP Project ID is invalid.".to_string(),
             });
         }
 
-        let mut project_id: Option<String> = None;
+        let mut resolved_project_id: Option<String> = project_id.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
         let mut tier: Option<String> = None;
 
         if load_status.is_success() {
             if let Ok(load_v) = load_resp.json::<serde_json::Value>().await {
                 if let Some(p) = load_v.get("cloudaicompanionProject").and_then(|s| s.as_str()) {
-                    project_id = Some(p.to_string());
+                    if resolved_project_id.is_none() {
+                        resolved_project_id = Some(p.to_string());
+                    }
                 }
                 if let Some(t) = load_v.get("currentTier") {
                     tier = t.get("name").or_else(|| t.get("id")).and_then(|s| s.as_str()).map(|s| s.to_string());
@@ -300,10 +314,10 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
         let quota_summary_url = format!("{}/v1internal:retrieveUserQuotaSummary", selected_base_url);
         eprintln!(
             "[CLOUD-CONTEXT]: account_id={}, project_id={:?}, quota_endpoint={}, oauth_client_id={}, scope_count=3",
-            account_id, project_id, quota_summary_url, self.client_id
+            account_id, resolved_project_id, quota_summary_url, self.client_id
         );
 
-        let req_body = if let Some(ref proj) = project_id {
+        let req_body = if let Some(ref proj) = resolved_project_id {
             serde_json::json!({ "project": proj })
         } else {
             serde_json::json!({})
@@ -311,15 +325,21 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
 
         eprintln!(
             "[CLOUD-DIRECT] QUOTA HTTP REQUEST: account_id={}, access_token_hash={}, access_token_length={}, endpoint={}, method=POST, project_id={:?}, quota_scope=retrieveUserQuotaSummary, account_binding={}",
-            account_id, acc_hash, access_token.len(), quota_summary_url, project_id, account_id
+            account_id, acc_hash, access_token.len(), quota_summary_url, resolved_project_id, account_id
         );
 
-        let summary_resp = self
+        let mut summary_req = self
             .http_client
             .post(&quota_summary_url)
             .header("Authorization", format!("Bearer {}", access_token))
             .header("Content-Type", "application/json")
-            .header("User-Agent", "antigravity/2.8.1")
+            .header("User-Agent", "antigravity/2.8.1");
+
+        if let Some(ref proj) = resolved_project_id {
+            summary_req = summary_req.header("X-Goog-User-Project", proj);
+        }
+
+        let summary_resp = summary_req
             .json(&req_body)
             .send()
             .await
@@ -358,11 +378,11 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
                 account_id, sanitized_err
             );
             eprintln!(
-                "[QUOTA-CLASSIFIER] ERROR CLASSIFICATION: account_id={}, source_error=HTTP 403, http_status=403, provider_error_kind=Forbidden, final_account_status=AuthRequired, reason=Cloud Code quota summary forbidden.",
+                "[QUOTA-CLASSIFIER] ERROR CLASSIFICATION: account_id={}, source_error=HTTP 403, http_status=403, provider_error_kind=Forbidden, final_account_status=Forbidden, reason=Cloud Code quota summary forbidden.",
                 account_id
             );
             eprintln!(
-                "\n========== AG-9.96 FORENSIC SUMMARY ==========\naccount_id={}\nrefresh_token_present=true\nrefresh_token_hash={}\ntoken_refresh_http_status=200\naccess_token_obtained=true\naccess_token_hash={}\ncloud_code_http_status=403\ncloud_code_endpoint={}\ntoken_identity_match=true\nquota_error_kind=Forbidden\nsnapshot_status=AuthRequired\nipc_status=AuthRequired\nui_status=AuthRequired\nFIRST_DIVERGENCE=Cloud Code retrieveUserQuotaSummary returned HTTP 403 Forbidden\nLIKELY_ROOT_CAUSE=CLOUD_CODE_QUOTA_API_FORBIDDEN_403\n===============================================\n",
+                "\n========== GOOGLE QUOTA FORBIDDEN AUDIT ==========\naccount_id={}\nrefresh_token_present=true\nrefresh_token_hash={}\ntoken_refresh_http_status=200\naccess_token_obtained=true\naccess_token_hash={}\ncloud_code_http_status=403\ncloud_code_endpoint={}\ntoken_identity_match=true\nquota_error_kind=Forbidden\nsnapshot_status=Forbidden\nipc_status=Forbidden\nui_status=Forbidden\nCLASSIFICATION=Google Cloud Code retrieveUserQuotaSummary returned HTTP 403 Forbidden (PERMISSION_DENIED)\nSTATUS_MAPPING=Forbidden (Authenticated, but Quota API Access Denied)\n==================================================\n",
                 account_id, rf_hash, acc_hash, quota_summary_url
             );
 

@@ -1,0 +1,60 @@
+import { GuideTask } from '../domain/entities/GuideTask';
+
+export const GUIDE_TASKS: GuideTask[] = [
+  {
+    id: 'docker',
+    title: 'Run Docker',
+    description: 'Build, run and troubleshoot containers',
+    icon: 'Box',
+    categoryIds: ['docker'],
+    tags: ['docker', 'container', 'dockerfile', 'compose', 'containers'],
+  },
+  {
+    id: 'aws',
+    title: 'Work with AWS',
+    description: 'Manage EC2, IAM, SSM and cloud infrastructure',
+    icon: 'Cloud',
+    categoryIds: ['aws'],
+    tags: ['aws', 'ec2', 'iam', 'ssm', 'cloud'],
+  },
+  {
+    id: 'linux',
+    title: 'Work with Linux',
+    description: 'Commands, processes, disk and system troubleshooting',
+    icon: 'Terminal',
+    categoryIds: ['cli'],
+    tags: ['linux', 'cli', 'bash', 'terminal', 'process', 'port'],
+  },
+  {
+    id: 'git',
+    title: 'Manage Git',
+    description: 'Commit, branch, merge and recover Git workflows',
+    icon: 'GitBranch',
+    categoryIds: ['git'],
+    tags: ['git', 'branch', 'merge', 'rebase', 'stash', 'undo'],
+  },
+  {
+    id: 'react',
+    title: 'Build with React',
+    description: 'Components, state, hooks and modern React development',
+    icon: 'Layout',
+    categoryIds: ['frontend'],
+    tags: ['react', 'vite', 'hooks', 'jsx', 'state', 'frontend'],
+  },
+  {
+    id: 'spring',
+    title: 'Build Spring Boot',
+    description: 'Build REST APIs and production backend services',
+    icon: 'Server',
+    categoryIds: ['backend'],
+    tags: ['backend', 'node.js', 'spring', 'api', 'server'],
+  },
+  {
+    id: 'troubleshoot',
+    title: 'Troubleshoot Production',
+    description: 'Diagnose real-world production incidents',
+    icon: 'AlertTriangle',
+    typeFilter: 'troubleshoot',
+    tags: ['troubleshooting', 'debugging', 'error', 'fix', 'oomkilled', 'conflict'],
+  },
+];

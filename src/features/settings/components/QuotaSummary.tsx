@@ -34,48 +34,6 @@ export function QuotaSummary({
   onRefreshAll,
   onUpdateRefreshSettings,
 }: QuotaSummaryProps) {
-  const [countdownStr, setCountdownStr] = useState<string | null>(null);
-
-  // Live Countdown calculation
-  useEffect(() => {
-    if (!autoRefreshEnabled || !isMonitoringRunning) {
-      setCountdownStr(null);
-      return;
-    }
-
-    const updateCountdown = () => {
-      const now = Math.floor(Date.now() / 1000);
-      let targetTs: number | null = null;
-
-      if (nextGlobalRefreshAt) {
-        const parsed = Number(nextGlobalRefreshAt);
-        if (!isNaN(parsed) && parsed > 0) {
-          targetTs = parsed;
-        }
-      }
-
-      if (!targetTs && lastGlobalRefreshAt) {
-        const last = Number(lastGlobalRefreshAt);
-        if (!isNaN(last) && last > 0) {
-          targetTs = last + intervalSeconds;
-        }
-      }
-
-      if (!targetTs) {
-        targetTs = now + intervalSeconds;
-      }
-
-      const diff = Math.max(0, targetTs - now);
-      const mins = Math.floor(diff / 60);
-      const secs = diff % 60;
-      setCountdownStr(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
-    };
-
-    updateCountdown();
-    const interval = setInterval(updateCountdown, 1000);
-    return () => clearInterval(interval);
-  }, [autoRefreshEnabled, isMonitoringRunning, nextGlobalRefreshAt, lastGlobalRefreshAt, intervalSeconds]);
-
   const handleToggleAutoRefresh = async () => {
     await onUpdateRefreshSettings({
       autoRefreshEnabled: !autoRefreshEnabled,
@@ -179,11 +137,13 @@ export function QuotaSummary({
           </div>
 
           {/* Countdown Presentation */}
-          {autoRefreshEnabled && countdownStr && (
-            <span className="text-muted-foreground text-xs font-sans">
-              Next refresh in <span className="font-mono text-foreground font-medium">{countdownStr}</span>
-            </span>
-          )}
+          <QuotaSummaryCountdownText
+            autoRefreshEnabled={autoRefreshEnabled}
+            isMonitoringRunning={isMonitoringRunning}
+            nextGlobalRefreshAt={nextGlobalRefreshAt}
+            lastGlobalRefreshAt={lastGlobalRefreshAt}
+            intervalSeconds={intervalSeconds}
+          />
         </div>
 
         {/* User Configuration Controls */}
@@ -217,5 +177,68 @@ export function QuotaSummary({
         </div>
       </div>
     </div>
+  );
+}
+
+function QuotaSummaryCountdownText({
+  autoRefreshEnabled,
+  isMonitoringRunning,
+  nextGlobalRefreshAt,
+  lastGlobalRefreshAt,
+  intervalSeconds,
+}: {
+  autoRefreshEnabled: boolean;
+  isMonitoringRunning: boolean;
+  nextGlobalRefreshAt: string | null;
+  lastGlobalRefreshAt: string | null;
+  intervalSeconds: number;
+}) {
+  const [countdownStr, setCountdownStr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!autoRefreshEnabled || !isMonitoringRunning) {
+      setCountdownStr(null);
+      return;
+    }
+
+    const updateCountdown = () => {
+      const now = Math.floor(Date.now() / 1000);
+      let targetTs: number | null = null;
+
+      if (nextGlobalRefreshAt) {
+        const parsed = Number(nextGlobalRefreshAt);
+        if (!isNaN(parsed) && parsed > 0) {
+          targetTs = parsed;
+        }
+      }
+
+      if (!targetTs && lastGlobalRefreshAt) {
+        const last = Number(lastGlobalRefreshAt);
+        if (!isNaN(last) && last > 0) {
+          targetTs = last + intervalSeconds;
+        }
+      }
+
+      if (!targetTs) {
+        targetTs = now + intervalSeconds;
+      }
+
+      const diff = Math.max(0, targetTs - now);
+      const mins = Math.floor(diff / 60);
+      const secs = diff % 60;
+      setCountdownStr(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+    };
+
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 1000);
+    return () => clearInterval(interval);
+  }, [autoRefreshEnabled, isMonitoringRunning, nextGlobalRefreshAt, lastGlobalRefreshAt, intervalSeconds]);
+
+  if (!autoRefreshEnabled || !countdownStr) return null;
+
+  return (
+    <span className="text-muted-foreground text-xs font-sans">
+      Next refresh in <span className="font-mono text-foreground font-medium">{countdownStr}</span>
+    </span>
   );
 }

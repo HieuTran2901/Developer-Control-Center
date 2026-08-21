@@ -197,12 +197,25 @@ impl AntigravityQuotaClient {
             return None;
         }
 
+        let mut all_failed = true;
         for runtime in runtimes {
-            if let Ok(email) = self.get_runtime_email(runtime).await {
-                if email.trim().to_ascii_lowercase() == norm_exp {
-                    return Some(runtime.clone());
+            match self.get_runtime_email(runtime).await {
+                Ok(email) => {
+                    all_failed = false;
+                    if email.trim().to_ascii_lowercase() == norm_exp {
+                        return Some(runtime.clone());
+                    }
+                }
+                Err(_) => {
+                    // This runtime failed to respond — CSRF may be stale after an account switch
                 }
             }
+        }
+
+        // All cached runtimes failed to respond: Antigravity likely restarted with new credentials.
+        // Invalidate the cache so the next call forces fresh process discovery.
+        if all_failed && !runtimes.is_empty() {
+            crate::monitor::antigravity_discovery::AntigravityDiscovery::invalidate_cache();
         }
 
         None

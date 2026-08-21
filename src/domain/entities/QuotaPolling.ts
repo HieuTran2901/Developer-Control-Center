@@ -6,6 +6,7 @@ export type AccountPollingState =
   | 'Online'
   | 'AuthRequired'
   | 'ReauthorizationRequired'
+  | 'Forbidden'
   | 'RateLimited'
   | 'NetworkError'
   | 'ProviderError'
@@ -14,6 +15,7 @@ export type AccountPollingState =
 export interface AccountMonitorConfig {
   accountId: string;
   provider?: QuotaProviderId;
+  projectId?: string | null;
   email: string;
   displayName: string | null;
   tier: string | null;
@@ -26,6 +28,7 @@ export interface AccountMonitorConfig {
 
 export interface AccountQuotaSnapshot {
   accountId: string;
+  projectId?: string | null;
   provider: QuotaProviderId;
   email: string;
   displayName: string | null;

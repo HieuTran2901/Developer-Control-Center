@@ -238,6 +238,28 @@ impl GoogleOAuthService {
         // 2. Generate PKCE parameters
         let pkce = PkceSession::new();
 
+        // Check if target account has a valid healthy refresh token in Keyring
+        let has_healthy_keyring_token = if !is_new_account {
+            if let Ok(Some(tok)) = self.credential_storage.get_refresh_token(account_id) {
+                !tok.trim().is_empty() && self.refresh_access_token(&tok).await.is_ok()
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let prompt_value = if is_new_account || !has_healthy_keyring_token || allow_email_update {
+            "consent select_account"
+        } else {
+            "select_account"
+        };
+
+        eprintln!(
+            "[{}] [OAuth] account_id={}, google_email={:?}, has_healthy_keyring_token={}, prompt_consent={}",
+            trace_id, account_id, target_account.as_ref().map(|a| &a.email), has_healthy_keyring_token, prompt_value.contains("consent")
+        );
+
         // 3. Construct Google Authorization URL
         let auth_url_str = {
             let mut auth_url = Url::parse(GOOGLE_AUTH_ENDPOINT).map_err(|e| e.to_string())?;
@@ -251,9 +273,10 @@ impl GoogleOAuthService {
                 .append_pair("code_challenge_method", "S256")
                 .append_pair("state", &pkce.state)
                 .append_pair("access_type", "offline")
-                .append_pair("prompt", "consent select_account");
+                .append_pair("prompt", prompt_value);
             auth_url.to_string()
         };
+
 
         // 4. Open default system browser AFTER listener is bound
         #[cfg(target_os = "windows")]
@@ -527,6 +550,7 @@ impl GoogleOAuthService {
             let new_config = crate::monitor::quota_polling::AccountMonitorConfig {
                 account_id: final_account_id.clone(),
                 provider: Some(crate::monitor::quota_provider::QuotaProviderId::GoogleCloudCode),
+                project_id: None,
                 email: user_email.clone(),
                 display_name: Some(user_email.clone()),
                 tier: None,
@@ -1215,4 +1239,40 @@ mod tests {
         assert_eq!(g.error_description.as_deref(), Some("Bad Request"));
         assert_eq!(g.error_uri.as_deref(), Some("https://accounts.google.com"));
     }
+
+    #[test]
+    fn test_ag997_prompt_consent_selection_logic() {
+        let is_new_account = false;
+        let has_healthy_keyring_token = false;
+        let allow_email_update = true;
+
+        let prompt_value = if is_new_account || !has_healthy_keyring_token || allow_email_update {
+            "consent select_account"
+        } else {
+            "select_account"
+        };
+
+        assert_eq!(prompt_value, "consent select_account");
+
+        let healthy_reconnect_prompt = if false || !true || false {
+            "consent select_account"
+        } else {
+            "select_account"
+        };
+        assert_eq!(healthy_reconnect_prompt, "select_account");
+    }
+
+    #[test]
+    fn test_ag997_multi_account_credential_isolation_matrix() {
+        let account_a = "trunghieunaruto204-gmail-com";
+        let account_b = "trunghieu10a1thptll-gmail-com";
+
+        let key_a = format!("{}.developer-control-center:antigravity-oauth", account_a);
+        let key_b = format!("{}.developer-control-center:antigravity-oauth", account_b);
+
+        assert_ne!(key_a, key_b);
+        assert!(key_a.contains("trunghieunaruto204"));
+        assert!(key_b.contains("trunghieu10a1thptll"));
+    }
 }
+

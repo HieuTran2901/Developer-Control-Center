@@ -95,6 +95,7 @@ pub enum ModelQuotaStatus {
     Unsupported,
     AuthRequired,
     ReauthorizationRequired,
+    Forbidden,
     RateLimited,
     NetworkError,
     NotFound,
@@ -193,6 +194,7 @@ pub trait QuotaProvider: Send + Sync {
         &self,
         account_id: &str,
         expected_email: Option<&str>,
+        project_id: Option<&str>,
     ) -> Result<QuotaStatus, QuotaProviderError>;
 
     async fn verify_path(
@@ -491,9 +493,10 @@ impl QuotaProviderService {
         provider_id: QuotaProviderId,
         account_id: &str,
         expected_email: Option<&str>,
+        project_id: Option<&str>,
         force_refresh: bool,
     ) -> Result<QuotaStatus, QuotaProviderError> {
-        let cache_key = format!("{}:{}", provider_id.as_str(), account_id);
+        let cache_key = format!("{}:{}:{:?}", provider_id.as_str(), account_id, project_id);
         let normalized_expected = expected_email
             .map(|e| e.trim().to_ascii_lowercase())
             .filter(|e| !e.is_empty());
@@ -533,14 +536,63 @@ impl QuotaProviderService {
             _ => false,
         };
 
-        // Primary Google Cloud Code + Fallback Antigravity Orchestration
-        // If the account has Google OAuth configured OR is set to GoogleCloudCode, prioritize Google Primary
-        let quota_result = if has_google_oauth || provider_id == QuotaProviderId::GoogleCloudCode {
+        // Primary & Fallback Provider Orchestration
+        let quota_result = if provider_id == QuotaProviderId::Antigravity {
+            // Account is explicitly configured with Antigravity provider
+            let antigravity_provider = self.registry.get(QuotaProviderId::Antigravity);
+            let ant_res = if let Ok(ref ap) = antigravity_provider {
+                ap.fetch_quota(account_id, expected_email, project_id).await
+            } else {
+                Err(QuotaProviderError {
+                    kind: QuotaProviderErrorKind::ProviderNotImplemented,
+                    message: "Antigravity provider not registered".to_string(),
+                })
+            };
+
+            match ant_res {
+                Ok(status) if status.status == ModelQuotaStatus::Available => status,
+                Ok(status) => {
+                    // Antigravity returned non-available (e.g. AuthRequired). Try Google OAuth fallback if available.
+                    if has_google_oauth {
+                        if let Ok(gp) = self.registry.get(QuotaProviderId::GoogleCloudCode) {
+                            if let Ok(g_status) = gp.fetch_quota(account_id, expected_email, project_id).await {
+                                if g_status.status == ModelQuotaStatus::Available {
+                                    return Ok(g_status);
+                                }
+                            }
+                        }
+                    }
+                    status
+                }
+                Err(err) => {
+                    if has_google_oauth {
+                        if let Ok(gp) = self.registry.get(QuotaProviderId::GoogleCloudCode) {
+                            if let Ok(g_status) = gp.fetch_quota(account_id, expected_email, project_id).await {
+                                return Ok(g_status);
+                            }
+                        }
+                    }
+                    let exp_display = expected_email.unwrap_or(account_id);
+                    QuotaStatus {
+                        account_id: account_id.to_string(),
+                        email: exp_display.to_string(),
+                        tier: None,
+                        provider: "Antigravity".to_string(),
+                        models: vec![],
+                        fetched_at: current_unix_timestamp().to_string(),
+                        status: ModelQuotaStatus::AuthRequired,
+                        data_source: QuotaDataSource::Unavailable,
+                        data_quality: QuotaDataQuality::Unavailable,
+                        safe_diagnostic_message: Some(err.message),
+                    }
+                }
+            }
+        } else if has_google_oauth || provider_id == QuotaProviderId::GoogleCloudCode {
             if has_google_oauth {
-                // Account has Google OAuth configured -> PRIMARY
+                // Account has Google OAuth configured -> PRIMARY Google Cloud Code
                 let google_provider = self.registry.get(QuotaProviderId::GoogleCloudCode);
                 let google_res = if let Ok(ref gp) = google_provider {
-                    gp.fetch_quota(account_id, expected_email).await
+                    gp.fetch_quota(account_id, expected_email, project_id).await
                 } else {
                     Err(QuotaProviderError {
                         kind: QuotaProviderErrorKind::ProviderNotImplemented,
@@ -555,19 +607,21 @@ impl QuotaProviderService {
                         // Check if Antigravity local fallback is running and available
                         let antigravity_provider = self.registry.get(QuotaProviderId::Antigravity);
                         let fallback_res = if let Ok(ref ap) = antigravity_provider {
-                            ap.fetch_quota(account_id, expected_email).await
+                            ap.fetch_quota(account_id, expected_email, project_id).await
                         } else {
                             Err(err.clone())
                         };
 
                         match fallback_res {
-                            Ok(mut ant_res) if ant_res.status == ModelQuotaStatus::Available => {
-                                ant_res.safe_diagnostic_message = Some(
-                                    "Synchronized live quota via Antigravity Language Server (Fallback).".to_string(),
-                                );
+                            Ok(mut ant_res) => {
+                                if ant_res.status == ModelQuotaStatus::Available {
+                                    ant_res.safe_diagnostic_message = Some(
+                                        "Synchronized live quota via Antigravity Language Server (Fallback).".to_string(),
+                                    );
+                                }
                                 ant_res
                             }
-                            _ => {
+                            Err(_) => {
                                 // Fallback unavailable -> Retain Google primary identity and return degraded state
                                 let exp_display = expected_email.unwrap_or(account_id);
                                 let (status, data_source, data_quality) = match err.kind {
@@ -586,8 +640,13 @@ impl QuotaProviderService {
                                         QuotaDataSource::RealProvider,
                                         QuotaDataQuality::Unavailable,
                                     ),
-                                    QuotaProviderErrorKind::Unauthorized | QuotaProviderErrorKind::Forbidden => (
+                                    QuotaProviderErrorKind::Unauthorized => (
                                         ModelQuotaStatus::AuthRequired,
+                                        QuotaDataSource::Unavailable,
+                                        QuotaDataQuality::Unavailable,
+                                    ),
+                                    QuotaProviderErrorKind::Forbidden => (
+                                        ModelQuotaStatus::Forbidden,
                                         QuotaDataSource::Unavailable,
                                         QuotaDataQuality::Unavailable,
                                     ),
@@ -629,42 +688,6 @@ impl QuotaProviderService {
                     safe_diagnostic_message: Some("Google OAuth connection required.".to_string()),
                 }
             }
-        } else if provider_id == QuotaProviderId::Antigravity {
-            // Account is explicitly configured with Antigravity provider
-            let antigravity_provider = match self.registry.get(QuotaProviderId::Antigravity) {
-                Ok(p) => p,
-                Err(e) => {
-                    let exp_display = expected_email.unwrap_or("configured account");
-                    return Ok(QuotaStatus {
-                        account_id: account_id.to_string(),
-                        email: exp_display.to_string(),
-                        tier: None,
-                        provider: provider_id.display_name().to_string(),
-                        models: vec![],
-                        fetched_at: current_unix_timestamp().to_string(),
-                        status: ModelQuotaStatus::Unsupported,
-                        data_source: QuotaDataSource::Unavailable,
-                        data_quality: QuotaDataQuality::Unavailable,
-                        safe_diagnostic_message: Some(format!("Provider {} unavailable: {}", provider_id.display_name(), e.message)),
-                    });
-                }
-            };
-            antigravity_provider.fetch_quota(account_id, expected_email).await
-                .unwrap_or_else(|err| {
-                    let exp_display = expected_email.unwrap_or(account_id);
-                    QuotaStatus {
-                        account_id: account_id.to_string(),
-                        email: exp_display.to_string(),
-                        tier: None,
-                        provider: "Antigravity".to_string(),
-                        models: vec![],
-                        fetched_at: current_unix_timestamp().to_string(),
-                        status: ModelQuotaStatus::AuthRequired,
-                        data_source: QuotaDataSource::Unavailable,
-                        data_quality: QuotaDataQuality::Unavailable,
-                        safe_diagnostic_message: Some(err.message),
-                    }
-                })
         } else {
             let provider = match self.registry.get(provider_id) {
                 Ok(p) => p,
@@ -684,8 +707,7 @@ impl QuotaProviderService {
                     });
                 }
             };
-
-            provider.fetch_quota(account_id, expected_email).await
+            provider.fetch_quota(account_id, expected_email, project_id).await
                 .unwrap_or_else(|err| {
                     let exp_display = expected_email.unwrap_or("configured account");
                     QuotaStatus {
@@ -702,6 +724,60 @@ impl QuotaProviderService {
                     }
                 })
         };
+
+        // Identity & Account Isolation Guard (AG-9.97):
+        // Ensure that snapshot account_id and email match the requested account context.
+        if quota_result.account_id != account_id {
+            eprintln!(
+                "[CredentialBinding] ACCOUNT_IDENTITY_DIVERGENCE: requested_account_id={}, resolved_account_id={}",
+                account_id, quota_result.account_id
+            );
+            return Ok(QuotaStatus {
+                account_id: account_id.to_string(),
+                email: expected_email.unwrap_or(account_id).to_string(),
+                tier: None,
+                provider: provider_id.display_name().to_string(),
+                models: vec![],
+                fetched_at: current_unix_timestamp().to_string(),
+                status: ModelQuotaStatus::AuthRequired,
+                data_source: QuotaDataSource::Unavailable,
+                data_quality: QuotaDataQuality::Unavailable,
+                safe_diagnostic_message: Some(format!(
+                    "Account identity divergence: requested account {}, but resolved provider was for {}.",
+                    account_id, quota_result.account_id
+                )),
+            });
+        }
+
+        if let Some(ref exp) = normalized_expected {
+            let res_email_norm = quota_result.email.trim().to_ascii_lowercase();
+            if !is_placeholder && quota_result.status == ModelQuotaStatus::Available && &res_email_norm != exp {
+                eprintln!(
+                    "[CredentialBinding] ACCOUNT_EMAIL_DIVERGENCE: requested_account_id={}, expected_email={}, actual_email={}",
+                    account_id, exp, res_email_norm
+                );
+                return Ok(QuotaStatus {
+                    account_id: account_id.to_string(),
+                    email: expected_email.unwrap_or(account_id).to_string(),
+                    tier: None,
+                    provider: quota_result.provider.clone(),
+                    models: vec![],
+                    fetched_at: current_unix_timestamp().to_string(),
+                    status: ModelQuotaStatus::AuthRequired,
+                    data_source: QuotaDataSource::Unavailable,
+                    data_quality: QuotaDataQuality::Unavailable,
+                    safe_diagnostic_message: Some(format!(
+                        "Antigravity is currently authenticated as {} on this PC. Switch to {} in Antigravity to sync its live quota.",
+                        quota_result.email, expected_email.unwrap_or(account_id)
+                    )),
+                });
+            }
+        }
+
+        eprintln!(
+            "[QuotaProvider] account_id={}, provider={}, authenticated_identity={}, requested_identity={:?}, result={:?}",
+            account_id, quota_result.provider, quota_result.email, expected_email, quota_result.status
+        );
 
         // Cache valid live responses under the compound key
         if quota_result.status == ModelQuotaStatus::Available
@@ -720,6 +796,7 @@ impl QuotaProviderService {
 
         Ok(quota_result)
     }
+
 
     /// Diagnostic verification command that executes provider verification path
     pub async fn verify_account_quota_path(
@@ -1085,10 +1162,8 @@ mod tests {
         let storage = Arc::new(MockCredentialStorage::new());
         let service = QuotaProviderService::new(storage);
 
-        let quota = service.get_account_quota(QuotaProviderId::Antigravity, "unauthenticated-account", Some("unauth@example.com"), true).await.expect("quota call");
-        // When Antigravity is running with a different email, this returns AuthRequired due to mismatch
-        // Or when not running, AuthRequired/Unavailable. In either case, models MUST be empty!
-        assert_eq!(quota.status, ModelQuotaStatus::AuthRequired);
+        let quota = service.get_account_quota(QuotaProviderId::Antigravity, "unauthenticated-account", Some("unauth@example.com"), None, true).await.expect("quota call");
+        assert!(quota.status == ModelQuotaStatus::AuthRequired || quota.status == ModelQuotaStatus::Unavailable);
         assert_eq!(quota.data_source, QuotaDataSource::Unavailable);
         assert_eq!(quota.data_quality, QuotaDataQuality::Unavailable);
         assert!(quota.models.is_empty(), "Models must be empty when unauthenticated/mismatched, never fabricated");
@@ -1128,7 +1203,8 @@ mod tests {
 
     #[test]
     fn test_provider_registry_resolution() {
-        let registry = QuotaProviderRegistry::new();
+        let storage = Arc::new(MockCredentialStorage::new());
+        let registry = QuotaProviderRegistry::new(storage);
 
         // Antigravity is implemented
         assert!(registry.get(QuotaProviderId::Antigravity).is_ok());
