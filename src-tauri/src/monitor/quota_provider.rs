@@ -95,9 +95,12 @@ pub enum ModelQuotaStatus {
     Unsupported,
     AuthRequired,
     ReauthorizationRequired,
+    ScopeInsufficient,
+    ServiceDisabled,
     Forbidden,
     RateLimited,
     NetworkError,
+    IdentityMismatch,
     NotFound,
 }
 
@@ -157,8 +160,12 @@ pub struct QuotaStatus {
 pub enum QuotaProviderErrorKind {
     AccountNotFound,
     CredentialUnavailable,
+    CredentialNotFound,
+    AuthenticationFailed,
     OAuthRefreshFailed,
     ReauthorizationRequired,
+    ScopeInsufficient,
+    ServiceDisabled,
     Unauthorized,
     Forbidden,
     RateLimited,
@@ -166,6 +173,7 @@ pub enum QuotaProviderErrorKind {
     UnsupportedResponse,
     NetworkError,
     InvalidQuotaData,
+    IdentityMismatch,
     ProviderNotImplemented,
 }
 

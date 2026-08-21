@@ -195,9 +195,12 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
             }
         }
 
-        eprintln!("[IDENTITY] OAUTH ACCOUNT: account_id={}, email={}", account_id, authenticated_email);
-        eprintln!("[IDENTITY] TOKEN: access_token_hash={}", acc_hash);
-        eprintln!("[IDENTITY] CLOUD REQUEST: account_id={}, access_token_hash={}, result=TOKEN_IDENTITY_MATCH", account_id, acc_hash);
+        let is_identity_matched = expected_email.map(|exp| exp.trim().to_ascii_lowercase() == authenticated_email.trim().to_ascii_lowercase()).unwrap_or(true);
+
+        eprintln!(
+            "[CLOUD-DIRECT-OAUTH]\naccount_id={}\nexpected_email={:?}\ncredential_found=true\ntoken_refresh=success\nrequired_scopes=https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform openid https://www.googleapis.com/auth/cortex\ngranted_scopes=userinfo.email,cloud-platform,openid\nscope_status=valid",
+            account_id, expected_email
+        );
 
         if let Some(exp) = expected_email {
             let norm_exp = exp.trim().to_ascii_lowercase();
@@ -209,8 +212,9 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
                 || norm_exp == "primary";
 
             if !is_placeholder && !norm_auth.is_empty() && norm_exp != norm_auth {
+                eprintln!("[CloudDirect] IDENTITY MISMATCH: account_id={}, authenticated={}, expected={}", account_id, authenticated_email, exp);
                 return Err(QuotaProviderError {
-                    kind: QuotaProviderErrorKind::Unauthorized,
+                    kind: QuotaProviderErrorKind::IdentityMismatch,
                     message: format!(
                         "Account mismatch: Google OAuth authenticated as {}, but account is {}.",
                         authenticated_email, exp
@@ -281,8 +285,8 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
         if let Some((_, ref resp)) = load_result {
             if resp.status().as_u16() == 403 && active_project_id.is_some() {
                 eprintln!(
-                    "[CLOUD-DIRECT-DISCOVERY]\naccount_id={}\nexpected_email={:?}\ncredential_found=true\ntoken_refresh=success\nload_code_assist_status=403\ndiscovered_project_id=None\ndiscovered_project_source=explicit_account_setting_forbidden\ndiscovered_project_owner={:?}\nidentity_match=true",
-                    account_id, expected_email, authenticated_email
+                    "[CLOUD-DIRECT-DISCOVERY]\naccount_id={}\nconsumer_project=None\nload_code_assist_status=403\ndiscovered_project_id=None\ndiscovery_status=explicit_project_forbidden",
+                    account_id
                 );
                 active_project_id = None;
                 project_source = "auto_discovery_fallback";
@@ -294,8 +298,8 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
             Some((url, r)) => (url, r),
             None => {
                 eprintln!(
-                    "[CLOUD-DIRECT-DISCOVERY]\naccount_id={}\nexpected_email={:?}\ncredential_found=true\ntoken_refresh=success\nload_code_assist_status=0\ndiscovered_project_id=None\ndiscovered_project_source={}\ndiscovered_project_owner={:?}\nidentity_match=false",
-                    account_id, expected_email, project_source, authenticated_email
+                    "[CLOUD-DIRECT-DISCOVERY]\naccount_id={}\nconsumer_project=None\nload_code_assist_status=0\ndiscovered_project_id=None\ndiscovery_status=network_error",
+                    account_id
                 );
                 return Err(QuotaProviderError {
                     kind: QuotaProviderErrorKind::NetworkError,
@@ -309,32 +313,41 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
 
         let mut resolved_project_id: Option<String> = active_project_id.clone();
         let mut tier: Option<String> = None;
+        let mut consumer_proj_extracted: Option<String> = None;
 
-        if load_status.is_success() {
-            if let Ok(load_v) = serde_json::from_str::<serde_json::Value>(&load_body_text) {
-                if let Some(p) = load_v.get("cloudaicompanionProject").and_then(|s| s.as_str()) {
-                    if resolved_project_id.is_none() {
-                        resolved_project_id = Some(p.to_string());
-                        project_source = "auto_discovered";
-                    }
+        if let Ok(load_v) = serde_json::from_str::<serde_json::Value>(&load_body_text) {
+            if let Some(p) = load_v.get("cloudaicompanionProject").and_then(|s| s.as_str()) {
+                if resolved_project_id.is_none() {
+                    resolved_project_id = Some(p.to_string());
+                    project_source = "auto_discovered";
                 }
-                if let Some(t) = load_v.get("currentTier") {
-                    tier = t.get("name").or_else(|| t.get("id")).and_then(|s| s.as_str()).map(|s| s.to_string());
-                } else if let Some(t_str) = load_v.get("tier").and_then(|s| s.as_str()) {
-                    tier = Some(t_str.to_string());
+            }
+            if let Some(t) = load_v.get("currentTier") {
+                tier = t.get("name").or_else(|| t.get("id")).and_then(|s| s.as_str()).map(|s| s.to_string());
+            } else if let Some(t_str) = load_v.get("tier").and_then(|s| s.as_str()) {
+                tier = Some(t_str.to_string());
+            }
+            // Check for consumer project in error details
+            if let Some(details) = load_v.get("error").and_then(|e| e.get("details")).and_then(|d| d.as_array()) {
+                for detail in details {
+                    if let Some(meta) = detail.get("metadata") {
+                        if let Some(cons) = meta.get("consumer").and_then(|c| c.as_str()) {
+                            consumer_proj_extracted = Some(cons.trim_start_matches("projects/").to_string());
+                        } else if let Some(cons) = meta.get("containerInfo").and_then(|c| c.as_str()) {
+                            consumer_proj_extracted = Some(cons.to_string());
+                        }
+                    }
                 }
             }
         }
 
         eprintln!(
-            "[CLOUD-DIRECT-DISCOVERY]\naccount_id={}\nexpected_email={:?}\ncredential_found=true\ntoken_refresh=success\nload_code_assist_status={}\ndiscovered_project_id={:?}\ndiscovered_project_source={}\ndiscovered_project_owner={:?}\nidentity_match={}",
+            "[CLOUD-DIRECT-DISCOVERY]\naccount_id={}\nconsumer_project={:?}\nload_code_assist_status={}\ndiscovered_project_id={:?}\ndiscovery_status={}",
             account_id,
-            expected_email,
+            consumer_proj_extracted,
             load_status.as_u16(),
             resolved_project_id,
-            project_source,
-            authenticated_email,
-            expected_email.map(|exp| exp.trim().to_ascii_lowercase() == authenticated_email.trim().to_ascii_lowercase()).unwrap_or(true)
+            if load_status.is_success() { "success" } else { "failed" }
         );
 
         if load_status.as_u16() == 401 {
@@ -345,10 +358,22 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
         }
         if load_status.as_u16() == 403 {
             let sanitized_err = sanitize_error_message(&load_body_text);
-            return Err(QuotaProviderError {
-                kind: QuotaProviderErrorKind::Forbidden,
-                message: format!("Cloud Code API access forbidden: {}", sanitized_err),
-            });
+            if load_body_text.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT") {
+                return Err(QuotaProviderError {
+                    kind: QuotaProviderErrorKind::ScopeInsufficient,
+                    message: format!("Google OAuth access token missing required scopes: {}", sanitized_err),
+                });
+            } else if load_body_text.contains("SERVICE_DISABLED") {
+                return Err(QuotaProviderError {
+                    kind: QuotaProviderErrorKind::ServiceDisabled,
+                    message: format!("Cloud Code Private API disabled on consumer project: {}", sanitized_err),
+                });
+            } else {
+                return Err(QuotaProviderError {
+                    kind: QuotaProviderErrorKind::Forbidden,
+                    message: format!("Cloud Code API access forbidden: {}", sanitized_err),
+                });
+            }
         }
 
         // 5. Query Cloud Code retrieveUserQuotaSummary endpoint for live quota metrics

@@ -29,10 +29,13 @@ pub enum AccountPollingState {
     Online,
     AuthRequired,
     ReauthorizationRequired,
+    ScopeInsufficient,
+    ServiceDisabled,
     Forbidden,
     RateLimited,
     NetworkError,
     ProviderError,
+    IdentityMismatch,
     Disabled,
 }
 
@@ -985,8 +988,32 @@ impl QuotaPollingEngine {
                         None,
                         quota.safe_diagnostic_message.clone(),
                     ),
+                    ModelQuotaStatus::ScopeInsufficient => (
+                        AccountPollingState::ScopeInsufficient,
+                        crate::monitor::quota_provider::QuotaDataSource::Unavailable,
+                        crate::monitor::quota_provider::QuotaDataQuality::Unavailable,
+                        None,
+                        None,
+                        quota.safe_diagnostic_message.clone(),
+                    ),
+                    ModelQuotaStatus::ServiceDisabled => (
+                        AccountPollingState::ServiceDisabled,
+                        crate::monitor::quota_provider::QuotaDataSource::Unavailable,
+                        crate::monitor::quota_provider::QuotaDataQuality::Unavailable,
+                        None,
+                        None,
+                        quota.safe_diagnostic_message.clone(),
+                    ),
                     ModelQuotaStatus::Forbidden => (
                         AccountPollingState::Forbidden,
+                        crate::monitor::quota_provider::QuotaDataSource::Unavailable,
+                        crate::monitor::quota_provider::QuotaDataQuality::Unavailable,
+                        None,
+                        None,
+                        quota.safe_diagnostic_message.clone(),
+                    ),
+                    ModelQuotaStatus::IdentityMismatch => (
+                        AccountPollingState::IdentityMismatch,
                         crate::monitor::quota_provider::QuotaDataSource::Unavailable,
                         crate::monitor::quota_provider::QuotaDataQuality::Unavailable,
                         None,
@@ -1042,14 +1069,25 @@ impl QuotaPollingEngine {
             Ok(Err(err)) => {
                 let (status, msg) = match err.kind {
                     QuotaProviderErrorKind::CredentialUnavailable
-                    | QuotaProviderErrorKind::Unauthorized => {
+                    | QuotaProviderErrorKind::CredentialNotFound
+                    | QuotaProviderErrorKind::Unauthorized
+                    | QuotaProviderErrorKind::AuthenticationFailed => {
                         (AccountPollingState::AuthRequired, err.message)
                     }
                     QuotaProviderErrorKind::ReauthorizationRequired => {
                         (AccountPollingState::ReauthorizationRequired, err.message)
                     }
+                    QuotaProviderErrorKind::ScopeInsufficient => {
+                        (AccountPollingState::ScopeInsufficient, err.message)
+                    }
+                    QuotaProviderErrorKind::ServiceDisabled => {
+                        (AccountPollingState::ServiceDisabled, err.message)
+                    }
                     QuotaProviderErrorKind::Forbidden => {
                         (AccountPollingState::Forbidden, err.message)
+                    }
+                    QuotaProviderErrorKind::IdentityMismatch => {
+                        (AccountPollingState::IdentityMismatch, err.message)
                     }
                     QuotaProviderErrorKind::RateLimited => {
                         (AccountPollingState::RateLimited, err.message)

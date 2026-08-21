@@ -25,7 +25,7 @@ pub const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 pub const GOOGLE_REVOKE_ENDPOINT: &str = "https://oauth2.googleapis.com/revoke";
 pub const GOOGLE_USERINFO_ENDPOINT: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 pub const GOOGLE_OAUTH_SCOPES: &str =
-    "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform openid";
+    "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform openid https://www.googleapis.com/auth/cortex";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
