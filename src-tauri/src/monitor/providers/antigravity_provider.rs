@@ -215,7 +215,7 @@ impl QuotaProvider for AntigravityQuotaProvider {
             None
         };
 
-        let diagnostic_msg = if let Some(other_email) = running_email {
+        let diagnostic_msg = if let Some(ref other_email) = running_email {
             format!(
                 "Antigravity is currently authenticated as {} on this PC. Switch to {} in Antigravity or connect it via Google OAuth in DCC to sync its live quota.",
                 other_email, exp_display
