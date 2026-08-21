@@ -6,10 +6,13 @@ export type AccountPollingState =
   | 'Online'
   | 'AuthRequired'
   | 'ReauthorizationRequired'
+  | 'ScopeInsufficient'
+  | 'ServiceDisabled'
   | 'Forbidden'
   | 'RateLimited'
   | 'NetworkError'
   | 'ProviderError'
+  | 'IdentityMismatch'
   | 'Disabled';
 
 export interface AccountMonitorConfig {

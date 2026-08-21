@@ -353,25 +353,24 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
         if load_status.as_u16() == 401 {
             return Err(QuotaProviderError {
                 kind: QuotaProviderErrorKind::Unauthorized,
-                message: "Cloud Code API unauthorized. Refresh token may be expired or revoked.".to_string(),
+                message: "This Google account needs to be reconnected.".to_string(),
             });
         }
         if load_status.as_u16() == 403 {
-            let sanitized_err = sanitize_error_message(&load_body_text);
             if load_body_text.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT") {
                 return Err(QuotaProviderError {
                     kind: QuotaProviderErrorKind::ScopeInsufficient,
-                    message: format!("Google OAuth access token missing required scopes: {}", sanitized_err),
+                    message: "Google OAuth credential is missing a required scope. Reconnect this account.".to_string(),
                 });
             } else if load_body_text.contains("SERVICE_DISABLED") {
                 return Err(QuotaProviderError {
                     kind: QuotaProviderErrorKind::ServiceDisabled,
-                    message: format!("Cloud Code Private API disabled on consumer project: {}", sanitized_err),
+                    message: "Cloud Code API is disabled for the consumer GCP project.".to_string(),
                 });
             } else {
                 return Err(QuotaProviderError {
                     kind: QuotaProviderErrorKind::Forbidden,
-                    message: format!("Cloud Code API access forbidden: {}", sanitized_err),
+                    message: "Google Cloud rejected this account's access to the configured GCP project.".to_string(),
                 });
             }
         }
@@ -411,7 +410,7 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
             );
             QuotaProviderError {
                 kind: QuotaProviderErrorKind::NetworkError,
-                message: sanitize_error_message(&format!("Cloud Code retrieveUserQuotaSummary request failed: {}", e)),
+                message: "Unable to reach Google Cloud quota service.".to_string(),
             }
         })?;
 
@@ -444,7 +443,7 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
             eprintln!("[CLOUD-DIRECT] AUTH HTTP 401: account_id={}, classification=Unauthorized", account_id);
             return Err(QuotaProviderError {
                 kind: QuotaProviderErrorKind::Unauthorized,
-                message: "Cloud Code quota summary unauthorized.".to_string(),
+                message: "This Google account needs to be reconnected.".to_string(),
             });
         }
 
@@ -455,10 +454,22 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
                 "[CLOUD-DIRECT] QUOTA FORBIDDEN: account_id={}, http_status=403, reason={:?}, message={:?}",
                 account_id, "PERMISSION_DENIED", sanitized_err
             );
-            return Err(QuotaProviderError {
-                kind: QuotaProviderErrorKind::Forbidden,
-                message: "Cloud Code quota summary forbidden.".to_string(),
-            });
+            if err_body.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT") {
+                return Err(QuotaProviderError {
+                    kind: QuotaProviderErrorKind::ScopeInsufficient,
+                    message: "Google OAuth credential is missing a required scope. Reconnect this account.".to_string(),
+                });
+            } else if err_body.contains("SERVICE_DISABLED") {
+                return Err(QuotaProviderError {
+                    kind: QuotaProviderErrorKind::ServiceDisabled,
+                    message: "Cloud Code API is disabled for the consumer GCP project.".to_string(),
+                });
+            } else {
+                return Err(QuotaProviderError {
+                    kind: QuotaProviderErrorKind::Forbidden,
+                    message: "Google Cloud rejected this account's access to the configured GCP project.".to_string(),
+                });
+            }
         }
 
         if summary_status.as_u16() == 429 {

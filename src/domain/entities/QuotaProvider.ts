@@ -6,9 +6,12 @@ export type ModelQuotaStatus =
   | 'Unsupported'
   | 'AuthRequired'
   | 'ReauthorizationRequired'
+  | 'ScopeInsufficient'
+  | 'ServiceDisabled'
   | 'Forbidden'
   | 'RateLimited'
   | 'NetworkError'
+  | 'IdentityMismatch'
   | 'NotFound';
 
 export type QuotaDataSource = 'RealProvider' | 'CachedRealProvider' | 'Unavailable';

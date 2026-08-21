@@ -82,7 +82,9 @@ export function AccountQuotaTable({
 
   // Explicit, deterministic state badges
   const getSubBadge = (s: AccountQuotaSnapshot) => {
-    const isMismatch = s.errorMessage?.includes('Account mismatch') || (s.status === 'AuthRequired' && s.errorMessage?.toLowerCase().includes('mismatch'));
+    const isMismatch = s.status === 'IdentityMismatch' || s.errorMessage?.includes('Account mismatch') || (s.status === 'AuthRequired' && s.errorMessage?.toLowerCase().includes('mismatch'));
+    const isScopeInsufficient = s.status === 'ScopeInsufficient';
+    const isServiceDisabled = s.status === 'ServiceDisabled';
     const isAuthReq = (s.status === 'AuthRequired' && !isMismatch) || s.status === 'ReauthorizationRequired';
     const isForbidden = s.status === 'Forbidden';
     const isStale = s.dataQuality === 'Stale';
@@ -95,6 +97,12 @@ export function AccountQuotaTable({
 
     if (isMismatch) {
       return { label: 'Account Mismatch', color: 'bg-amber-500/15 text-amber-400 border-amber-500/25' };
+    }
+    if (isScopeInsufficient) {
+      return { label: 'Scope Insufficient', color: 'bg-destructive/15 text-destructive border-destructive/25' };
+    }
+    if (isServiceDisabled) {
+      return { label: 'Service Disabled', color: 'bg-amber-500/15 text-amber-400 border-amber-500/25' };
     }
     if (isAuthReq) {
       return { label: 'Auth Required', color: 'bg-destructive/15 text-destructive border-destructive/25' };
@@ -127,7 +135,9 @@ export function AccountQuotaTable({
   };
 
   const getStatusPresentation = (s: AccountQuotaSnapshot, rankInfo?: RankedAccount) => {
-    const isMismatch = s.errorMessage?.includes('Account mismatch') || (s.status === 'AuthRequired' && s.errorMessage?.toLowerCase().includes('mismatch'));
+    const isMismatch = s.status === 'IdentityMismatch' || s.errorMessage?.includes('Account mismatch') || (s.status === 'AuthRequired' && s.errorMessage?.toLowerCase().includes('mismatch'));
+    const isScopeInsufficient = s.status === 'ScopeInsufficient';
+    const isServiceDisabled = s.status === 'ServiceDisabled';
     const isAuthReq = (s.status === 'AuthRequired' && !isMismatch) || s.status === 'ReauthorizationRequired';
     const isForbidden = s.status === 'Forbidden';
     const isStale = s.dataQuality === 'Stale';
@@ -143,7 +153,23 @@ export function AccountQuotaTable({
         dotColor: 'bg-amber-400',
         textColor: 'text-amber-400',
         label: 'Account Mismatch',
-        sublabel: 'Local runtime mismatch',
+        sublabel: s.errorMessage || 'The authenticated Google account does not match this quota account.',
+      };
+    }
+    if (isScopeInsufficient) {
+      return {
+        dotColor: 'bg-destructive',
+        textColor: 'text-destructive',
+        label: 'Scope Insufficient',
+        sublabel: s.errorMessage || 'Google OAuth credential is missing a required scope. Reconnect this account.',
+      };
+    }
+    if (isServiceDisabled) {
+      return {
+        dotColor: 'bg-amber-400',
+        textColor: 'text-amber-400',
+        label: 'Service Disabled',
+        sublabel: s.errorMessage || 'Cloud Code API is disabled for the consumer GCP project.',
       };
     }
     if (isAuthReq) {
@@ -151,7 +177,7 @@ export function AccountQuotaTable({
         dotColor: 'bg-destructive',
         textColor: 'text-destructive',
         label: 'Auth Required',
-        sublabel: 'Reauthentication needed',
+        sublabel: s.errorMessage || 'No valid Google OAuth credential is available for this account.',
       };
     }
     if (isForbidden) {
@@ -159,7 +185,7 @@ export function AccountQuotaTable({
         dotColor: 'bg-rose-400',
         textColor: 'text-rose-400',
         label: 'API Forbidden',
-        sublabel: 'Google Cloud 403 Forbidden',
+        sublabel: s.errorMessage || "Google Cloud rejected this account's access to the configured GCP project.",
       };
     }
     if (isStale) {
@@ -282,6 +308,11 @@ export function AccountQuotaTable({
               const resetWeeklyCountdown = QuotaOrchestrationService.getResetCountdown(primaryModel?.weeklyResetAt).formattedCountdown;
 
               const isCurrentRefreshing = refreshingAccountId === s.accountId;
+
+              if (s.status !== 'Online' && s.status !== 'Checking' && s.status !== 'Disabled') {
+                const httpStatus = (s.status === 'Forbidden' || s.status === 'ServiceDisabled' || s.status === 'ScopeInsufficient') ? 403 : (s.status === 'AuthRequired' || s.status === 'ReauthorizationRequired') ? 401 : 0;
+                console.error(`[QUOTA-UI-ERROR]\naccount_id=${s.accountId}\nprovider=${s.provider}\nerror_kind=${s.status}\nhttp_status=${httpStatus}\nproject_id=${s.projectId || 'None'}\nmessage_key=${s.errorMessage || 'Unknown error'}`);
+              }
 
               return (
                 <tr

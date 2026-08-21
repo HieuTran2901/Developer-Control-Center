@@ -640,6 +640,21 @@ impl QuotaProviderService {
                                 // Fallback unavailable -> Retain Google primary identity and return degraded state
                                 let exp_display = expected_email.unwrap_or(account_id);
                                 let (status, data_source, data_quality) = match err.kind {
+                                    QuotaProviderErrorKind::ScopeInsufficient => (
+                                        ModelQuotaStatus::ScopeInsufficient,
+                                        QuotaDataSource::Unavailable,
+                                        QuotaDataQuality::Unavailable,
+                                    ),
+                                    QuotaProviderErrorKind::ServiceDisabled => (
+                                        ModelQuotaStatus::ServiceDisabled,
+                                        QuotaDataSource::Unavailable,
+                                        QuotaDataQuality::Unavailable,
+                                    ),
+                                    QuotaProviderErrorKind::IdentityMismatch => (
+                                        ModelQuotaStatus::IdentityMismatch,
+                                        QuotaDataSource::Unavailable,
+                                        QuotaDataQuality::Unavailable,
+                                    ),
                                     QuotaProviderErrorKind::ReauthorizationRequired => (
                                         ModelQuotaStatus::ReauthorizationRequired,
                                         QuotaDataSource::Unavailable,

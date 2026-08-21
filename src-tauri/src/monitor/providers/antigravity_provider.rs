@@ -217,6 +217,34 @@ impl QuotaProvider for AntigravityQuotaProvider {
 
                     // Preserve authentic error classification from Cloud Direct API
                     match cloud_err.kind {
+                        QuotaProviderErrorKind::ScopeInsufficient => {
+                            return Ok(QuotaStatus {
+                                account_id: account_id.to_string(),
+                                email: exp_display.to_string(),
+                                tier: None,
+                                provider: "Antigravity Cloud Direct".to_string(),
+                                models: vec![],
+                                fetched_at: current_unix_timestamp().to_string(),
+                                status: ModelQuotaStatus::ScopeInsufficient,
+                                data_source: QuotaDataSource::Unavailable,
+                                data_quality: QuotaDataQuality::Unavailable,
+                                safe_diagnostic_message: Some(cloud_err.message),
+                            });
+                        }
+                        QuotaProviderErrorKind::ServiceDisabled => {
+                            return Ok(QuotaStatus {
+                                account_id: account_id.to_string(),
+                                email: exp_display.to_string(),
+                                tier: None,
+                                provider: "Antigravity Cloud Direct".to_string(),
+                                models: vec![],
+                                fetched_at: current_unix_timestamp().to_string(),
+                                status: ModelQuotaStatus::ServiceDisabled,
+                                data_source: QuotaDataSource::Unavailable,
+                                data_quality: QuotaDataQuality::Unavailable,
+                                safe_diagnostic_message: Some(cloud_err.message),
+                            });
+                        }
                         QuotaProviderErrorKind::Forbidden => {
                             return Ok(QuotaStatus {
                                 account_id: account_id.to_string(),
@@ -228,10 +256,21 @@ impl QuotaProvider for AntigravityQuotaProvider {
                                 status: ModelQuotaStatus::Forbidden,
                                 data_source: QuotaDataSource::Unavailable,
                                 data_quality: QuotaDataQuality::Unavailable,
-                                safe_diagnostic_message: Some(format!(
-                                    "Google Cloud quota request for {} was forbidden (HTTP 403 PERMISSION_DENIED). Account may lack required permissions or GCP Project ID is invalid.",
-                                    exp_display
-                                )),
+                                safe_diagnostic_message: Some(cloud_err.message),
+                            });
+                        }
+                        QuotaProviderErrorKind::IdentityMismatch => {
+                            return Ok(QuotaStatus {
+                                account_id: account_id.to_string(),
+                                email: exp_display.to_string(),
+                                tier: None,
+                                provider: "Antigravity Cloud Direct".to_string(),
+                                models: vec![],
+                                fetched_at: current_unix_timestamp().to_string(),
+                                status: ModelQuotaStatus::IdentityMismatch,
+                                data_source: QuotaDataSource::Unavailable,
+                                data_quality: QuotaDataQuality::Unavailable,
+                                safe_diagnostic_message: Some(cloud_err.message),
                             });
                         }
                         QuotaProviderErrorKind::ReauthorizationRequired | QuotaProviderErrorKind::Unauthorized => {
@@ -245,10 +284,7 @@ impl QuotaProvider for AntigravityQuotaProvider {
                                 status: ModelQuotaStatus::ReauthorizationRequired,
                                 data_source: QuotaDataSource::Unavailable,
                                 data_quality: QuotaDataQuality::Unavailable,
-                                safe_diagnostic_message: Some(format!(
-                                    "Google OAuth authorization for {} expired or revoked. Reauthorization required.",
-                                    exp_display
-                                )),
+                                safe_diagnostic_message: Some(cloud_err.message),
                             });
                         }
                         QuotaProviderErrorKind::RateLimited => {
@@ -262,10 +298,7 @@ impl QuotaProvider for AntigravityQuotaProvider {
                                 status: ModelQuotaStatus::RateLimited,
                                 data_source: QuotaDataSource::Unavailable,
                                 data_quality: QuotaDataQuality::Unavailable,
-                                safe_diagnostic_message: Some(format!(
-                                    "Google Cloud quota request for {} was rate limited. Retrying shortly.",
-                                    exp_display
-                                )),
+                                safe_diagnostic_message: Some(cloud_err.message),
                             });
                         }
                         QuotaProviderErrorKind::NetworkError => {
@@ -279,10 +312,7 @@ impl QuotaProvider for AntigravityQuotaProvider {
                                 status: ModelQuotaStatus::NetworkError,
                                 data_source: QuotaDataSource::Unavailable,
                                 data_quality: QuotaDataQuality::Unavailable,
-                                safe_diagnostic_message: Some(format!(
-                                    "Network connection to Google Cloud API for {} failed.",
-                                    exp_display
-                                )),
+                                safe_diagnostic_message: Some(cloud_err.message),
                             });
                         }
                         _ => {} // Fallthrough if CredentialUnavailable or ProviderNotImplemented
