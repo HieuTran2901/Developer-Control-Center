@@ -95,7 +95,7 @@ export function TroubleshootingAssistant({
   };
 
   return (
-    <div className="p-5 rounded-2xl bg-card border border-amber-500/30 space-y-4 shadow-sm select-none">
+    <div className="p-5 rounded-2xl bg-card border border-amber-500/30 space-y-4 shadow-sm">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-2 text-xs font-mono font-bold text-amber-400 uppercase">

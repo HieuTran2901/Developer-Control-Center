@@ -54,7 +54,10 @@ export function Drawer({
 
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`fixed inset-y-0 right-0 z-60 w-full ${widthClass} bg-card border-l border-border/80 flex flex-col min-h-0 shadow-2xl overflow-hidden animate-in slide-in-from-right duration-200`}
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        className={`fixed inset-y-0 right-0 z-60 w-full ${widthClass} bg-card border-l border-border/80 flex flex-col min-h-0 shadow-2xl overflow-hidden animate-in slide-in-from-right duration-200 pointer-events-auto`}
       >
         {/* Fixed Drawer Header */}
         <div className="flex items-center justify-between p-4 sm:p-5 border-b border-border/60 shrink-0">

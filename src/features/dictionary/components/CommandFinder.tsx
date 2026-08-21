@@ -244,7 +244,7 @@ export function CommandFinder({ onOpenGuideArticle, onClose }: CommandFinderProp
                   <div
                     key={command.id}
                     onClick={() => setSelectedCommandId(command.id)}
-                    className={`p-3.5 rounded-xl border transition-all cursor-pointer select-none space-y-2.5 ${
+                    className={`p-3.5 rounded-xl border transition-all cursor-pointer space-y-2.5 ${
                       isSelected
                         ? 'bg-primary/10 border-primary shadow-sm'
                         : 'bg-background/60 border-border/60 hover:border-primary/40 hover:bg-background'

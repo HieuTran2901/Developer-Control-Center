@@ -17,9 +17,22 @@ export function OverlayBackdrop({
     ? 'bg-transparent'
     : 'bg-black/15';
 
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget && onClick) {
+      onClick();
+    }
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) {
+      e.stopPropagation();
+    }
+  };
+
   return (
     <div
-      onClick={onClick}
+      onClick={handleClick}
+      onPointerDown={handlePointerDown}
       className={`fixed inset-0 z-50 transition-all duration-150 animate-in fade-in ${baseStyle} ${className}`}
     >
       {children}

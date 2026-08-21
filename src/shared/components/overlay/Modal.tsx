@@ -49,10 +49,20 @@ export function Modal({
     <OverlayPortal>
       <OverlayBackdrop onClick={closeOnBackdropClick ? onClose : undefined} />
 
-      <div className="fixed inset-0 z-60 flex items-center justify-center p-4 sm:p-6 overflow-hidden">
+      <div
+        className="fixed inset-0 z-60 flex items-center justify-center p-4 sm:p-6 overflow-hidden"
+        onClick={(e) => {
+          if (e.target === e.currentTarget && closeOnBackdropClick) {
+            onClose();
+          }
+        }}
+      >
         <div
           onClick={(e) => e.stopPropagation()}
-          className={`w-full ${maxWidthClass} max-h-[calc(100dvh-48px)] flex flex-col min-h-0 bg-card border border-border/80 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150`}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          className={`w-full ${maxWidthClass} max-h-[calc(100dvh-48px)] flex flex-col min-h-0 bg-card border border-border/80 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150 pointer-events-auto`}
         >
           {/* Fixed Header */}
           {(title || subtitle) && (

@@ -118,14 +118,13 @@ export function ContextualToolsDrawer({
       widthClass="max-w-2xl"
       transparentBackdrop={true}
     >
-      <div className="space-y-4 select-none">
+      <div className="space-y-4">
         {currentTool === 'COMMANDS' && (
           <CommandFinder
             onOpenGuideArticle={(artId) => {
               onOpenArticle?.(artId);
               onClose();
             }}
-            onClose={onClose}
           />
         )}
 
@@ -139,7 +138,7 @@ export function ContextualToolsDrawer({
         )}
 
         {currentTool === 'FIX' && (
-          <TroubleshootingAssistant onClose={onClose} />
+          <TroubleshootingAssistant />
         )}
 
         {currentTool === 'PRODUCTION' && <ProductionChecklist />}
