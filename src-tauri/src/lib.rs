@@ -1,7 +1,7 @@
 pub mod ai;
 pub mod commands;
 pub mod error;
-mod monitor;
+pub mod monitor;
 pub mod pipeline;
 pub mod policy;
 pub mod runtime;

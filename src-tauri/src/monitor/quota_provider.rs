@@ -573,6 +573,13 @@ impl QuotaProviderService {
                         }
                     }
                     let exp_display = expected_email.unwrap_or(account_id);
+                    let final_st = match err.kind {
+                        QuotaProviderErrorKind::Forbidden => ModelQuotaStatus::Forbidden,
+                        QuotaProviderErrorKind::ReauthorizationRequired | QuotaProviderErrorKind::Unauthorized => ModelQuotaStatus::ReauthorizationRequired,
+                        QuotaProviderErrorKind::RateLimited => ModelQuotaStatus::RateLimited,
+                        QuotaProviderErrorKind::NetworkError => ModelQuotaStatus::NetworkError,
+                        _ => ModelQuotaStatus::AuthRequired,
+                    };
                     QuotaStatus {
                         account_id: account_id.to_string(),
                         email: exp_display.to_string(),
@@ -580,7 +587,7 @@ impl QuotaProviderService {
                         provider: "Antigravity".to_string(),
                         models: vec![],
                         fetched_at: current_unix_timestamp().to_string(),
-                        status: ModelQuotaStatus::AuthRequired,
+                        status: final_st,
                         data_source: QuotaDataSource::Unavailable,
                         data_quality: QuotaDataQuality::Unavailable,
                         safe_diagnostic_message: Some(err.message),

@@ -9,7 +9,7 @@ use crate::monitor::antigravity_headless_worker::HeadlessAntigravityManager;
 use crate::monitor::providers::google_cloud_code_provider::GoogleCloudCodeQuotaProvider;
 use crate::monitor::quota_provider::{
     current_unix_timestamp, ModelQuota, ModelQuotaStatus, QuotaDataSource, QuotaDataQuality,
-    QuotaProvider, QuotaProviderError, QuotaProviderId, QuotaStatus,
+    QuotaProvider, QuotaProviderError, QuotaProviderErrorKind, QuotaProviderId, QuotaStatus,
     QuotaVerificationDiagnostic, SecureCredentialStorage,
 };
 
@@ -151,8 +151,8 @@ impl QuotaProvider for AntigravityQuotaProvider {
                 HeadlessAntigravityManager::snapshot_active_session_to_account(account_id);
                 let duration_ms = start_time.elapsed().as_millis();
                 eprintln!(
-                    "[AG_QUOTA] account_id={}, expected_email={:?}, source=active_runtime, runtime_pid={}, returned_email={:?}, identity_match=true, duration_ms={}",
-                    account_id, expected_email, runtime.process_id, snap.account_identity, duration_ms
+                    "[AG_QUOTA_FLOW] account_id={}, stage=active_runtime, provider=Antigravity Local Runtime, credential_present=true, credential_lookup=found, cloud_status=200, fallback_reason=none, final_status=Available, duration_ms={}",
+                    account_id, duration_ms
                 );
                 return Ok(Self::map_snapshot_to_quota_status(
                     account_id,
@@ -174,8 +174,8 @@ impl QuotaProvider for AntigravityQuotaProvider {
             if is_match {
                 let duration_ms = start_time.elapsed().as_millis();
                 eprintln!(
-                    "[AG_QUOTA] account_id={}, expected_email={:?}, source=headless_worker, returned_email={:?}, identity_match=true, duration_ms={}",
-                    account_id, expected_email, snap.account_identity, duration_ms
+                    "[AG_QUOTA_FLOW] account_id={}, stage=headless_worker, provider=Antigravity Headless Worker, credential_present=true, credential_lookup=found, cloud_status=200, fallback_reason=none, final_status=Available, duration_ms={}",
+                    account_id, duration_ms
                 );
                 return Ok(Self::map_snapshot_to_quota_status(
                     account_id,
@@ -189,24 +189,109 @@ impl QuotaProvider for AntigravityQuotaProvider {
         // 4. Cloud Direct API Fallback: If local runtime & headless worker are unauthenticated or on a different account,
         // use stored Google OAuth refresh token for this account from Keyring to retrieve account quota directly.
         if let Some(ref cloud_provider) = self.cloud_provider {
-            if let Ok(g_status) = cloud_provider.fetch_quota(account_id, expected_email, project_id).await {
-                if g_status.status == ModelQuotaStatus::Available {
+            let cloud_res = cloud_provider.fetch_quota(account_id, expected_email, project_id).await;
+            match cloud_res {
+                Ok(g_status) => {
                     let duration_ms = start_time.elapsed().as_millis();
+                    let final_st_name = format!("{:?}", g_status.status);
                     eprintln!(
-                        "[AG_QUOTA] account_id={}, expected_email={:?}, source=cloud_direct, returned_email={:?}, identity_match=true, duration_ms={}",
-                        account_id, expected_email, g_status.email, duration_ms
+                        "[AG_QUOTA_FLOW] account_id={}, stage=cloud_direct, provider=Antigravity Cloud Direct, credential_present=true, credential_lookup=found, cloud_status=200, fallback_reason=none, final_status={}, duration_ms={}",
+                        account_id, final_st_name, duration_ms
                     );
                     let mut status = g_status;
                     status.provider = "Antigravity Cloud Direct".to_string();
-                    status.safe_diagnostic_message = Some(
-                        "Synchronized live quota via Antigravity Cloud Direct API (Account isolated).".to_string()
-                    );
+                    if status.safe_diagnostic_message.is_none() {
+                        status.safe_diagnostic_message = Some(
+                            "Synchronized live quota via Antigravity Cloud Direct API (Account isolated).".to_string()
+                        );
+                    }
                     return Ok(status);
+                }
+                Err(cloud_err) => {
+                    let duration_ms = start_time.elapsed().as_millis();
+                    let exp_display = expected_email.unwrap_or(account_id);
+                    eprintln!(
+                        "[AG_QUOTA_FLOW] account_id={}, stage=cloud_direct, provider=Antigravity Cloud Direct, credential_present=true, credential_lookup=found, cloud_status=err, fallback_reason={:?}, final_status={:?}, duration_ms={}",
+                        account_id, cloud_err.kind, cloud_err.kind, duration_ms
+                    );
+
+                    // Preserve authentic error classification from Cloud Direct API
+                    match cloud_err.kind {
+                        QuotaProviderErrorKind::Forbidden => {
+                            return Ok(QuotaStatus {
+                                account_id: account_id.to_string(),
+                                email: exp_display.to_string(),
+                                tier: None,
+                                provider: "Antigravity Cloud Direct".to_string(),
+                                models: vec![],
+                                fetched_at: current_unix_timestamp().to_string(),
+                                status: ModelQuotaStatus::Forbidden,
+                                data_source: QuotaDataSource::Unavailable,
+                                data_quality: QuotaDataQuality::Unavailable,
+                                safe_diagnostic_message: Some(format!(
+                                    "Google Cloud quota request for {} was forbidden (HTTP 403 PERMISSION_DENIED). Account may lack required permissions or GCP Project ID is invalid.",
+                                    exp_display
+                                )),
+                            });
+                        }
+                        QuotaProviderErrorKind::ReauthorizationRequired | QuotaProviderErrorKind::Unauthorized => {
+                            return Ok(QuotaStatus {
+                                account_id: account_id.to_string(),
+                                email: exp_display.to_string(),
+                                tier: None,
+                                provider: "Antigravity Cloud Direct".to_string(),
+                                models: vec![],
+                                fetched_at: current_unix_timestamp().to_string(),
+                                status: ModelQuotaStatus::ReauthorizationRequired,
+                                data_source: QuotaDataSource::Unavailable,
+                                data_quality: QuotaDataQuality::Unavailable,
+                                safe_diagnostic_message: Some(format!(
+                                    "Google OAuth authorization for {} expired or revoked. Reauthorization required.",
+                                    exp_display
+                                )),
+                            });
+                        }
+                        QuotaProviderErrorKind::RateLimited => {
+                            return Ok(QuotaStatus {
+                                account_id: account_id.to_string(),
+                                email: exp_display.to_string(),
+                                tier: None,
+                                provider: "Antigravity Cloud Direct".to_string(),
+                                models: vec![],
+                                fetched_at: current_unix_timestamp().to_string(),
+                                status: ModelQuotaStatus::RateLimited,
+                                data_source: QuotaDataSource::Unavailable,
+                                data_quality: QuotaDataQuality::Unavailable,
+                                safe_diagnostic_message: Some(format!(
+                                    "Google Cloud quota request for {} was rate limited. Retrying shortly.",
+                                    exp_display
+                                )),
+                            });
+                        }
+                        QuotaProviderErrorKind::NetworkError => {
+                            return Ok(QuotaStatus {
+                                account_id: account_id.to_string(),
+                                email: exp_display.to_string(),
+                                tier: None,
+                                provider: "Antigravity Cloud Direct".to_string(),
+                                models: vec![],
+                                fetched_at: current_unix_timestamp().to_string(),
+                                status: ModelQuotaStatus::NetworkError,
+                                data_source: QuotaDataSource::Unavailable,
+                                data_quality: QuotaDataQuality::Unavailable,
+                                safe_diagnostic_message: Some(format!(
+                                    "Network connection to Google Cloud API for {} failed.",
+                                    exp_display
+                                )),
+                            });
+                        }
+                        _ => {} // Fallthrough if CredentialUnavailable or ProviderNotImplemented
+                    }
                 }
             }
         }
 
-        // 5. If no quota source authenticated as expected_email, return diagnostic identity mismatch warning
+        // 5. If no quota source authenticated as expected_email, return diagnostic identity mismatch or unconfigured warning
         let duration_ms = start_time.elapsed().as_millis();
         let exp_display = expected_email.unwrap_or(account_id);
         let running_email = if let Some(first_rt) = runtimes.first() {
@@ -215,18 +300,29 @@ impl QuotaProvider for AntigravityQuotaProvider {
             None
         };
 
-        let diagnostic_msg = if let Some(ref other_email) = running_email {
-            format!(
-                "Antigravity is currently authenticated as {} on this PC. Switch to {} in Antigravity or connect it via Google OAuth in DCC to sync its live quota.",
-                other_email, exp_display
+        let (diagnostic_msg, final_status, fallback_reason) = if let Some(ref other_email) = running_email {
+            (
+                format!(
+                    "Antigravity is currently authenticated as {} on this PC. Switch to {} in Antigravity or connect it via Google OAuth in DCC to sync its live quota.",
+                    other_email, exp_display
+                ),
+                ModelQuotaStatus::AuthRequired,
+                "active_runtime_identity_mismatch",
             )
         } else {
-            "Antigravity is not currently running and no stored credential was found for this account. Please log in or connect via Google OAuth to monitor live quota.".to_string()
+            (
+                format!(
+                    "No stored Google OAuth credential was found in OS Keyring for {}. Please connect this account via Google OAuth to monitor live quota.",
+                    exp_display
+                ),
+                ModelQuotaStatus::AuthRequired,
+                "no_credential",
+            )
         };
 
         eprintln!(
-            "[AG_QUOTA] account_id={}, expected_email={:?}, source=none, returned_email={:?}, identity_match=false, status=AuthRequired, duration_ms={}",
-            account_id, expected_email, running_email, duration_ms
+            "[AG_QUOTA_FLOW] account_id={}, stage=final_fallback, provider=Antigravity Local Runtime, credential_present=false, credential_lookup=not_found, cloud_status=none, fallback_reason={}, final_status={:?}, duration_ms={}",
+            account_id, fallback_reason, final_status, duration_ms
         );
 
         Ok(QuotaStatus {
@@ -236,7 +332,7 @@ impl QuotaProvider for AntigravityQuotaProvider {
             provider: "Antigravity Local Runtime".to_string(),
             models: vec![],
             fetched_at: current_unix_timestamp().to_string(),
-            status: ModelQuotaStatus::AuthRequired,
+            status: final_status,
             data_source: QuotaDataSource::Unavailable,
             data_quality: QuotaDataQuality::Unavailable,
             safe_diagnostic_message: Some(diagnostic_msg),
