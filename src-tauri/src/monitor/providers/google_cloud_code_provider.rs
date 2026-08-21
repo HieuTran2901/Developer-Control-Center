@@ -226,49 +226,78 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
             "https://cloudcode-pa.googleapis.com",
         ];
 
-        let mut load_resp_opt = None;
-        let mut selected_base_url = base_urls[0];
+        let initial_project = project_id.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+        let mut active_project_id = initial_project.clone();
+        let mut project_source = if initial_project.is_some() {
+            "explicit_account_setting"
+        } else {
+            "none"
+        };
 
-        let mut load_json = serde_json::json!({
-            "metadata": {
-                "ideType": "ANTIGRAVITY",
-                "ideVersion": "2.8.1",
-                "pluginType": "GEMINI",
-                "subclientType": "HUB"
-            }
-        });
-        if let Some(p) = project_id.filter(|p| !p.trim().is_empty()) {
-            load_json["cloudaicompanionProject"] = serde_json::json!(p.trim());
-            load_json["project"] = serde_json::json!(p.trim());
-        }
-
-        for base_url in base_urls {
-            let load_url = format!("{}/v1internal:loadCodeAssist", base_url);
-            let mut req = self
-                .http_client
-                .post(&load_url)
-                .header("Authorization", format!("Bearer {}", access_token))
-                .header("Content-Type", "application/json")
-                .header("User-Agent", "antigravity/2.8.1");
-
-            if let Some(p) = project_id.filter(|p| !p.trim().is_empty()) {
-                req = req.header("X-Goog-User-Project", p.trim());
-            }
-
-            let req = req.json(&load_json);
-
-            if let Ok(resp) = req.send().await {
-                if resp.status().is_success() || resp.status().as_u16() == 400 || resp.status().as_u16() == 404 || resp.status().as_u16() == 401 || resp.status().as_u16() == 403 {
-                    selected_base_url = base_url;
-                    load_resp_opt = Some(resp);
-                    break;
+        let attempt_load_code_assist = |proj: Option<String>| {
+            let client = self.http_client.clone();
+            let tok = access_token.clone();
+            async move {
+                let mut load_json = serde_json::json!({
+                    "metadata": {
+                        "ideType": "ANTIGRAVITY",
+                        "ideVersion": "2.8.1",
+                        "pluginType": "GEMINI",
+                        "subclientType": "HUB"
+                    }
+                });
+                if let Some(ref p) = proj {
+                    load_json["cloudaicompanionProject"] = serde_json::json!(p);
+                    load_json["project"] = serde_json::json!(p);
                 }
+
+                for base_url in base_urls {
+                    let load_url = format!("{}/v1internal:loadCodeAssist", base_url);
+                    let mut req = client
+                        .post(&load_url)
+                        .header("Authorization", format!("Bearer {}", tok))
+                        .header("Content-Type", "application/json")
+                        .header("User-Agent", "antigravity/2.8.1");
+
+                    if let Some(ref p) = proj {
+                        req = req.header("X-Goog-User-Project", p);
+                    }
+
+                    let req = req.json(&load_json);
+
+                    if let Ok(resp) = req.send().await {
+                        let st = resp.status().as_u16();
+                        if resp.status().is_success() || st == 400 || st == 404 || st == 401 || st == 403 {
+                            return Some((base_url, resp));
+                        }
+                    }
+                }
+                None
+            }
+        };
+
+        let mut load_result = attempt_load_code_assist(active_project_id.clone()).await;
+
+        // If explicit project returned HTTP 403 (unauthorized project for this identity), retry WITHOUT explicit project
+        if let Some((_, ref resp)) = load_result {
+            if resp.status().as_u16() == 403 && active_project_id.is_some() {
+                eprintln!(
+                    "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source=explicit_account_setting_forbidden oauth_scopes=userinfo.email,cloud-platform,openid endpoint=loadCodeAssist http_status=403 error_kind=Forbidden_FallbackToAutoDiscovery",
+                    account_id, expected_email, active_project_id
+                );
+                active_project_id = None;
+                project_source = "auto_discovery_fallback";
+                load_result = attempt_load_code_assist(None).await;
             }
         }
 
-        let load_resp = match load_resp_opt {
-            Some(r) => r,
+        let (selected_base_url, load_resp) = match load_result {
+            Some((url, r)) => (url, r),
             None => {
+                eprintln!(
+                    "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source={} oauth_scopes=userinfo.email,cloud-platform,openid endpoint=loadCodeAssist http_status=0 error_kind=NetworkError",
+                    account_id, expected_email, active_project_id, project_source
+                );
                 return Err(QuotaProviderError {
                     kind: QuotaProviderErrorKind::NetworkError,
                     message: "Failed to connect to Antigravity Cloud Code endpoints.".to_string(),
@@ -278,21 +307,27 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
 
         let load_status = load_resp.status();
         if load_status.as_u16() == 401 {
-            eprintln!("[CLOUD-DIRECT] AUTH HTTP 401: account_id={}, stage=loadCodeAssist, classification=Unauthorized", account_id);
+            eprintln!(
+                "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source={} oauth_scopes=userinfo.email,cloud-platform,openid endpoint=loadCodeAssist http_status=401 error_kind=Unauthorized",
+                account_id, expected_email, active_project_id, project_source
+            );
             return Err(QuotaProviderError {
                 kind: QuotaProviderErrorKind::Unauthorized,
                 message: "Cloud Code API unauthorized. Refresh token may be expired or revoked.".to_string(),
             });
         }
         if load_status.as_u16() == 403 {
-            eprintln!("[CLOUD-DIRECT] AUTH HTTP 403: account_id={}, stage=loadCodeAssist, classification=Forbidden", account_id);
+            eprintln!(
+                "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source={} oauth_scopes=userinfo.email,cloud-platform,openid endpoint=loadCodeAssist http_status=403 error_kind=Forbidden",
+                account_id, expected_email, active_project_id, project_source
+            );
             return Err(QuotaProviderError {
                 kind: QuotaProviderErrorKind::Forbidden,
                 message: "Cloud Code API access forbidden. Account may lack required permissions or GCP Project ID is invalid.".to_string(),
             });
         }
 
-        let mut resolved_project_id: Option<String> = project_id.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+        let mut resolved_project_id: Option<String> = active_project_id.clone();
         let mut tier: Option<String> = None;
 
         if load_status.is_success() {
@@ -300,6 +335,7 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
                 if let Some(p) = load_v.get("cloudaicompanionProject").and_then(|s| s.as_str()) {
                     if resolved_project_id.is_none() {
                         resolved_project_id = Some(p.to_string());
+                        project_source = "google_cloud_code_auto_discovered";
                     }
                 }
                 if let Some(t) = load_v.get("currentTier") {
@@ -312,54 +348,70 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
 
         // 5. Query Cloud Code retrieveUserQuotaSummary endpoint for live quota metrics
         let quota_summary_url = format!("{}/v1internal:retrieveUserQuotaSummary", selected_base_url);
-        eprintln!(
-            "[CLOUD-CONTEXT]: account_id={}, project_id={:?}, quota_endpoint={}, oauth_client_id={}, scope_count=3",
-            account_id, resolved_project_id, quota_summary_url, self.client_id
-        );
 
-        let req_body = if let Some(ref proj) = resolved_project_id {
-            serde_json::json!({ "project": proj })
-        } else {
-            serde_json::json!({})
+        let attempt_retrieve_summary = |proj: Option<String>| {
+            let client = self.http_client.clone();
+            let tok = access_token.clone();
+            let url = quota_summary_url.clone();
+            async move {
+                let req_body = if let Some(ref p) = proj {
+                    serde_json::json!({ "project": p })
+                } else {
+                    serde_json::json!({})
+                };
+
+                let mut summary_req = client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", tok))
+                    .header("Content-Type", "application/json")
+                    .header("User-Agent", "antigravity/2.8.1");
+
+                if let Some(ref p) = proj {
+                    summary_req = summary_req.header("X-Goog-User-Project", p);
+                }
+
+                summary_req.json(&req_body).send().await
+            }
         };
 
-        eprintln!(
-            "[CLOUD-DIRECT] QUOTA HTTP REQUEST: account_id={}, access_token_hash={}, access_token_length={}, endpoint={}, method=POST, project_id={:?}, quota_scope=retrieveUserQuotaSummary, account_binding={}",
-            account_id, acc_hash, access_token.len(), quota_summary_url, resolved_project_id, account_id
-        );
-
-        let mut summary_req = self
-            .http_client
-            .post(&quota_summary_url)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Content-Type", "application/json")
-            .header("User-Agent", "antigravity/2.8.1");
-
-        if let Some(ref proj) = resolved_project_id {
-            summary_req = summary_req.header("X-Goog-User-Project", proj);
-        }
-
-        let summary_resp = summary_req
-            .json(&req_body)
-            .send()
-            .await
-            .map_err(|e| QuotaProviderError {
+        let mut summary_resp = attempt_retrieve_summary(resolved_project_id.clone()).await.map_err(|e| {
+            eprintln!(
+                "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source={} oauth_scopes=userinfo.email,cloud-platform,openid endpoint={} http_status=0 error_kind=NetworkError",
+                account_id, expected_email, resolved_project_id, project_source, quota_summary_url
+            );
+            QuotaProviderError {
                 kind: QuotaProviderErrorKind::NetworkError,
                 message: sanitize_error_message(&format!("Cloud Code retrieveUserQuotaSummary request failed: {}", e)),
-            })?;
+            }
+        })?;
+
+        // If explicit project returned HTTP 403 on retrieveUserQuotaSummary, retry without explicit project
+        if summary_resp.status().as_u16() == 403 && project_source == "explicit_account_setting" {
+            eprintln!(
+                "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source=explicit_account_setting_forbidden oauth_scopes=userinfo.email,cloud-platform,openid endpoint={} http_status=403 error_kind=Forbidden_FallbackToAutoDiscovery",
+                account_id, expected_email, resolved_project_id, quota_summary_url
+            );
+            resolved_project_id = None;
+            project_source = "auto_discovery_fallback";
+            if let Ok(retry_resp) = attempt_retrieve_summary(None).await {
+                summary_resp = retry_resp;
+            }
+        }
 
         let summary_status = summary_resp.status();
         eprintln!(
-            "[CLOUD-DIRECT] QUOTA HTTP RESPONSE: account_id={}, http_status={}, success={}, endpoint={}",
-            account_id, summary_status.as_u16(), summary_status.is_success(), quota_summary_url
+            "[CLOUD-DIRECT-TRACE] account_id={} expected_email={:?} credential_found=true token_refresh=success project_id={:?} project_source={} oauth_scopes=userinfo.email,cloud-platform,openid endpoint={} http_status={} error_kind={}",
+            account_id,
+            expected_email,
+            resolved_project_id,
+            project_source,
+            quota_summary_url,
+            summary_status.as_u16(),
+            if summary_status.is_success() { "none" } else if summary_status.as_u16() == 403 { "Forbidden" } else if summary_status.as_u16() == 401 { "Unauthorized" } else { "UnsupportedResponse" }
         );
 
         if summary_status.as_u16() == 401 {
             eprintln!("[CLOUD-DIRECT] AUTH HTTP 401: account_id={}, classification=Unauthorized", account_id);
-            eprintln!(
-                "[QUOTA-CLASSIFIER] ERROR CLASSIFICATION: account_id={}, source_error=HTTP 401, http_status=401, provider_error_kind=Unauthorized, final_account_status=AuthRequired, reason=Cloud Code quota summary unauthorized.",
-                account_id
-            );
             return Err(QuotaProviderError {
                 kind: QuotaProviderErrorKind::Unauthorized,
                 message: "Cloud Code quota summary unauthorized.".to_string(),
@@ -373,19 +425,6 @@ impl QuotaProvider for GoogleCloudCodeQuotaProvider {
                 "[CLOUD-DIRECT] QUOTA FORBIDDEN: account_id={}, http_status=403, reason={:?}, message={:?}",
                 account_id, "PERMISSION_DENIED", sanitized_err
             );
-            eprintln!(
-                "[CLOUD-DIRECT] AUTH HTTP 403: account_id={}, classification=Forbidden, forbidden_reason={:?}",
-                account_id, sanitized_err
-            );
-            eprintln!(
-                "[QUOTA-CLASSIFIER] ERROR CLASSIFICATION: account_id={}, source_error=HTTP 403, http_status=403, provider_error_kind=Forbidden, final_account_status=Forbidden, reason=Cloud Code quota summary forbidden.",
-                account_id
-            );
-            eprintln!(
-                "\n========== GOOGLE QUOTA FORBIDDEN AUDIT ==========\naccount_id={}\nrefresh_token_present=true\nrefresh_token_hash={}\ntoken_refresh_http_status=200\naccess_token_obtained=true\naccess_token_hash={}\ncloud_code_http_status=403\ncloud_code_endpoint={}\ntoken_identity_match=true\nquota_error_kind=Forbidden\nsnapshot_status=Forbidden\nipc_status=Forbidden\nui_status=Forbidden\nCLASSIFICATION=Google Cloud Code retrieveUserQuotaSummary returned HTTP 403 Forbidden (PERMISSION_DENIED)\nSTATUS_MAPPING=Forbidden (Authenticated, but Quota API Access Denied)\n==================================================\n",
-                account_id, rf_hash, acc_hash, quota_summary_url
-            );
-
             return Err(QuotaProviderError {
                 kind: QuotaProviderErrorKind::Forbidden,
                 message: "Cloud Code quota summary forbidden.".to_string(),
