@@ -1,4 +1,4 @@
-# Developer Control Center
+# Developer Control Center v2
 
 Developer Control Center là ứng dụng Desktop giúp quản lý, khởi động, và giám sát các dự án phát triển (Spring Boot, React, Node.js, Rust...) thông qua giao diện đồ họa trực quan (GUI) hiện đại, thay vì phải thao tác thủ công qua Command Line.
 
